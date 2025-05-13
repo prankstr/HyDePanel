@@ -1,6 +1,6 @@
 import threading
-import time
-from datetime import datetime
+import time 
+from datetime import datetime, time as dt_time 
 
 from fabric.utils import get_relative_path
 from fabric.widgets.box import Box
@@ -9,7 +9,7 @@ from fabric.widgets.svg import Svg
 from gi.repository import GLib, Gtk
 from loguru import logger
 
-from services import WeatherService
+from services import WeatherService 
 from shared import ButtonWidget, Grid, Popover, ScanButton
 from utils import BarConfig
 from utils.icons import weather_icons
@@ -28,9 +28,66 @@ class BaseWeatherWidget:
         return f" {self.sunrise_time}  {self.sunset_time}"
 
     def update_sunrise_sunset(self, data):
-        # Get the sunrise and sunset times
-        self.sunrise_time = data["astronomy"]["sunrise"]
-        self.sunset_time = data["astronomy"]["sunset"]
+        raw_sunrise_str_in = data["astronomy"]["sunrise"]
+        raw_sunset_str_in = data["astronomy"]["sunset"]
+
+        logger.debug(f"[Weather] Raw sunrise from data: '{raw_sunrise_str_in}' (repr: {repr(raw_sunrise_str_in)})")
+        logger.debug(f"[Weather] Raw sunset from data: '{raw_sunset_str_in}' (repr: {repr(raw_sunset_str_in)})")
+
+        sunrise_input_str = str(raw_sunrise_str_in).strip()
+        sunset_input_str = str(raw_sunset_str_in).strip()
+        
+        def parse_12h_to_24h_object(time_str_12h: str) -> datetime | None:
+            try:
+                cleaned_str = time_str_12h.strip().upper() 
+                
+                time_part_end_idx = cleaned_str.rfind(" ")
+                if time_part_end_idx == -1:
+                    logger.error(f"Manual parse: Cannot find space to separate time and AM/PM in '{time_str_12h}'.")
+                    return None
+                
+                time_part = cleaned_str[:time_part_end_idx].strip()
+                period_part = cleaned_str[time_part_end_idx + 1:].strip()
+
+                if period_part not in ("AM", "PM"):
+                    logger.error(f"Manual parse: Invalid period '{period_part}' in '{time_str_12h}'. Expected AM or PM.")
+                    return None
+                try:
+                    dt_obj_hm = datetime.strptime(time_part, "%I:%M")
+                except ValueError as e_hm:
+                    logger.error(f"Manual parse: strptime failed for time part '{time_part}' with %I:%M. Error: {e_hm}")
+                    return None
+                    
+                hour = dt_obj_hm.hour 
+                minute = dt_obj_hm.minute
+
+                if period_part == "AM":
+                    if hour == 12: 
+                        hour = 0
+                elif period_part == "PM":
+                    if hour != 12: 
+                        hour += 12
+                return datetime.now().replace(hour=hour, minute=minute, second=0, microsecond=0)
+            
+            except Exception as ex_manual_detail: 
+                logger.error(f"Manual parse: Unexpected error processing '{time_str_12h}': {ex_manual_detail}")
+                return None
+
+        sunrise_obj = parse_12h_to_24h_object(sunrise_input_str)
+        sunset_obj = parse_12h_to_24h_object(sunset_input_str)
+
+        if sunrise_obj and sunset_obj:
+            self.sunrise_time = sunrise_obj.strftime("%H:%M")
+            self.sunset_time = sunset_obj.strftime("%H:%M")
+            logger.debug(f"[Weather] Stored 24h sunrise_time (manual): '{self.sunrise_time}'")
+            logger.debug(f"[Weather] Stored 24h sunset_time (manual): '{self.sunset_time}'")
+        else:
+            logger.error(
+                f"[Weather] Manual AM/PM parsing failed for '{sunrise_input_str}' or '{sunset_input_str}'. "
+                "Setting sunrise/sunset to 00:00 as a fallback."
+            )
+            self.sunrise_time = "00:00" 
+            self.sunset_time = "00:00"
         return True
 
     def temperature(self, value) -> str:
@@ -40,39 +97,45 @@ class BaseWeatherWidget:
         else:
             return f"{int(int(value) * 9 / 5 + 32)}°F"
 
-    def check_if_day(self, current_time: str | None = None) -> str:
-        time_format = "%I:%M %p"
+    def check_if_day(self, current_time_str_24h: str | None = None) -> bool:
+        time_format_24h = "%H:%M" 
 
-        if current_time is None:
-            current_time = datetime.now().strftime(time_format)
+        current_dt_str: str
+        if current_time_str_24h is None:
+            current_dt_str = datetime.now().strftime(time_format_24h)
+        else:
+            current_dt_str = str(current_time_str_24h).strip()
 
-        current_time_obj = datetime.strptime(current_time, time_format)
-        sunrise_time_obj = datetime.strptime(self.sunrise_time, time_format)
-        sunset_time_obj = datetime.strptime(self.sunset_time, time_format)
+        sunrise_dt_str = str(self.sunrise_time).strip() 
+        sunset_dt_str = str(self.sunset_time).strip()
+        
+        logger.debug(
+            f"[Weather] check_if_day (24h): Current='{current_dt_str}', "
+            f"Sunrise='{sunrise_dt_str}', Sunset='{sunset_dt_str}' with format='{time_format_24h}'"
+        )
 
-        # Compare current time with sunrise and sunset
+        try:
+            current_time_obj = datetime.strptime(current_dt_str, time_format_24h).time()
+            sunrise_time_obj = datetime.strptime(sunrise_dt_str, time_format_24h).time()
+            sunset_time_obj = datetime.strptime(sunset_dt_str, time_format_24h).time()
+        except ValueError as e:
+            logger.error(
+                f"[Weather] Error during strptime in check_if_day (24h). "
+                f"Inputs: Current='{current_dt_str}', Sunrise='{sunrise_dt_str}', Sunset='{sunset_dt_str}'. Error: {e}"
+            )
+            return True 
         return sunrise_time_obj <= current_time_obj < sunset_time_obj
 
-        # wttr.in time are in 300,400...2100 format ,
-        #  we need to convert it to 4:00...21:00
-
-    def convert_to_12hr_format(self, time: str) -> str:
-        time = int(time)
-        hour = time // 100  # Get the hour (e.g., 1200 -> 12)
-        minute = time % 100  # Get the minutes (e.g., 1200 -> 00)
-
-        # Convert to 12-hour format
-        period = "AM" if hour < 12 else "PM"
-
-        # Adjust hour for 12-hour format
-        if hour == 0:
-            hour = 12
-        elif hour > 12:
-            hour -= 12
-
-        # Format the time as a string
-        return f"{hour}:{minute:02d} {period}"
-
+    def convert_wttr_time_to_24hr_format(self, wttr_time_str: str) -> str:
+        """Converts wttr.in time (e.g., '300', '1200', '2100') to 'HH:MM' 24-hour format."""
+        try:
+            time_val = int(wttr_time_str)
+            hour = time_val // 100
+            minute = time_val % 100
+            return f"{hour:02d}:{minute:02d}"
+        except ValueError:
+            logger.error(f"[Weather] Invalid wttr_time_str for 24hr conversion: {wttr_time_str}")
+            return "00:00" 
 
 class WeatherMenu(Box, BaseWeatherWidget):
     """A menu to display the weather information."""
@@ -91,18 +154,12 @@ class WeatherMenu(Box, BaseWeatherWidget):
             **kwargs,
         )
         self.scan_btn = ScanButton(h_align="start", visible=False)
-
         self.config = config
-
         self.update_time = datetime.now()
         self.update_sunrise_sunset(data)
 
-        # Get the current weather
         self.current_weather = data["current"]
-
-        # Get the hourly forecast
         self.hourly_forecast = data["hourly"]
-
         self.weather_icons_dir = get_relative_path("../assets/icons/svg/weather")
 
         self.current_weather_image = Svg(
@@ -112,160 +169,102 @@ class WeatherMenu(Box, BaseWeatherWidget):
             h_align="start",
         )
 
-        self.title_box = Grid(
-            name="weather-header-grid",
+        self.title_box = Grid(name="weather-header-grid")
+        self.title_box.attach(self.current_weather_image, 0, 0, 2, 3)
+        self.title_box.attach(
+            Label(style_classes="header-label", h_align="start", label=f"{data['location']}"),
+            2, 0, 1, 1,
+        )
+        self.title_box.attach(
+            Label(name="condition", h_align="start", label=f"{self.current_weather['weatherDesc'][0]['value']}"),
+            2, 1, 1, 1,
+        )
+        self.title_box.attach(
+            Label(style_classes="header-label", name="sunrise-sunset", h_align="start",
+                  label=self.sunrise_sunset_time()),
+            2, 2, 1, 1,
+        )
+        self.title_box.attach(
+            Label(style_classes="stats", h_align="center",
+                  label=f" {self.temperature(value=self.current_weather['temp_C'])}"),
+            3, 0, 1, 1,
+        )
+        self.title_box.attach(
+            Label(style_classes="stats", h_align="center", label=f"󰖎 {self.current_weather['humidity']}%"),
+            3, 1, 1, 1,
         )
 
-        self.title_box.attach(
-            self.current_weather_image,
-            0,
-            0,
-            2,
-            3,
-        )
-
-        self.title_box.attach(
-            Label(
-                style_classes="header-label",
-                h_align="start",
-                label=f"{data['location']}",
-            ),
-            2,
-            0,
-            1,
-            1,
-        )
-
-        self.title_box.attach(
-            Label(
-                name="condition",
-                h_align="start",
-                label=f"{self.current_weather['weatherDesc'][0]['value']}",
-            ),
-            2,
-            1,
-            1,
-            1,
-        )
-
-        self.title_box.attach(
-            Label(
-                style_classes="header-label",
-                name="sunrise-sunset",
-                h_align="start",
-                label=self.sunrise_sunset_time(),
-            ),
-            2,
-            2,
-            1,
-            1,
-        )
+        try:
+            windspeed_kmph = float(self.current_weather['windspeedKmph'])
+            windspeed_mps = windspeed_kmph / 3.6
+            wind_label_text = f" {windspeed_mps:.1f} m/s" 
+        except (ValueError, KeyError) as e:
+            logger.warning(f"[WeatherMenu] Could not parse or find windspeedKmph: {e}. Defaulting wind display.")
+            wind_label_text = " N/A"
 
         self.title_box.attach(
             Label(
                 style_classes="stats",
                 h_align="center",
-                label=f" {self.temperature(value=self.current_weather['temp_C'])}",
+                label=wind_label_text, 
             ),
-            3,
-            0,
-            1,
-            1,
+            3, 
+            2, 
+            1, 
+            1, 
         )
 
-        self.title_box.attach(
-            Label(
-                style_classes="stats",
-                h_align="center",
-                label=f"󰖎 {self.current_weather['humidity']}%",
-            ),
-            3,
-            1,
-            1,
-            1,
-        )
-
-        self.title_box.attach(
-            Label(
-                style_classes="stats",
-                h_align="center",
-                label=f" {self.current_weather['windspeedKmph']} mph",
-            ),
-            3,
-            2,
-            1,
-            1,
-        )
-
-        # Create a grid to display the hourly forecast
-        self.forecast_box = Grid(
-            row_spacing=10,
-            column_spacing=20,
-            name="weather-grid",
-        )
-
-        expander = Gtk.Expander(
-            name="weather-expander",
-            visible=True,
-            child=self.forecast_box,
-            expanded=self.config["expanded"],
-        )
-
+        self.forecast_box = Grid(row_spacing=10, column_spacing=20, name="weather-grid")
+        expander = Gtk.Expander(name="weather-expander", visible=True, child=self.forecast_box,
+                                expanded=self.config["expanded"])
         self.children = (self.scan_btn, self.title_box, expander)
-
         self.update_widget(initial=True)
-
-        # reusing the fabricator to call specified intervals
         util_fabricator.connect("changed", lambda *_: self.update_widget())
 
     def update_widget(self, initial=False):
-        # Check if the update time is more than 1 minute ago
-        if (datetime.now() - self.update_time).total_seconds() < 60 and not initial:
+        if not initial and (datetime.now() - self.update_time).total_seconds() < 60:
             return
-
-        logger.debug("[Weather] Updating weather widget")
-
+        logger.debug("[WeatherMenu] Updating weather widget")
         self.update_time = datetime.now()
 
-        current_time = int(time.strftime("%H00"))
+        current_hour_marker = int(datetime.now().strftime("%H")) * 100
+        forecast_start_index = 0
+        for i, forecast_item in enumerate(self.hourly_forecast):
+            if int(forecast_item['time']) >= current_hour_marker:
+                forecast_start_index = i
+                break
+        
+        next_values = self.hourly_forecast[forecast_start_index : forecast_start_index + 4]
 
-        next_values = self.hourly_forecast[:4]
+        for col_idx, column_data in enumerate(next_values):
+            if col_idx >= 4: break
 
-        if current_time > 1200:
-            next_values = self.hourly_forecast[4:8]
-
-        # show next 4 hours forecast
-        for col in range(4):
-            column_data = next_values[col]
-
+            hour_label_text_24h = self.convert_wttr_time_to_24hr_format(column_data['time'])
+            
             hour = Label(
                 style_classes="weather-forecast-time",
-                label=f"{self.convert_to_12hr_format(column_data['time'])}",
+                label=hour_label_text_24h, 
                 h_align="center",
             )
             icon = Svg(
                 svg_file=self.get_weather_asset(
                     column_data["weatherCode"],
-                    self.convert_to_12hr_format(column_data["time"]),
+                    time_str_24h=hour_label_text_24h, 
                 ),
-                size=65,
-                h_align="center",
-                h_expand=True,
-                style_classes="weather-forecast-icon",
+                size=65, h_align="center", h_expand=True, style_classes="weather-forecast-icon",
             )
-
             temp = Label(
                 style_classes="weather-forecast-temp",
                 label=self.temperature(column_data["tempC"]),
                 h_align="center",
             )
-            self.forecast_box.attach(hour, col, 0, 1, 1)
-            self.forecast_box.attach(icon, col, 1, 1, 1)
-            self.forecast_box.attach(temp, col, 2, 1, 1)
+            self.forecast_box.attach(hour, col_idx, 0, 1, 1)
+            self.forecast_box.attach(icon, col_idx, 1, 1, 1)
+            self.forecast_box.attach(temp, col_idx, 2, 1, 1)
 
-    def get_weather_asset(self, code: int, time_str: str | None = None) -> str:
+    def get_weather_asset(self, code: int, time_str_24h: str | None = None) -> str:
         is_day = self.check_if_day(
-            current_time=time_str,
+            current_time_str_24h=time_str_24h, 
         )
         image_name = "image" if is_day else "image-night"
         return f"{self.weather_icons_dir}/{weather_icons[str(code)][image_name]}.svg"
@@ -279,112 +278,75 @@ class WeatherWidget(ButtonWidget, BaseWeatherWidget):
         widget_config: BarConfig,
         **kwargs,
     ):
-        # Initialize the Box with specific name and style
-        super().__init__(
-            widget_config["weather"],
-            name="weather",
-            **kwargs,
-        )
+        super().__init__(widget_config["weather"], name="weather", **kwargs)
 
-        self.weather_icon = text_icon(
-            icon="",
-            props={
-                "style_classes": "panel-icon",
-            },
-        )
-
+        self.weather_icon = text_icon(icon="", props={"style_classes": "panel-icon"})
         self.popover = None
-
         self.update_time = datetime.now()
+        self.current_weather = None 
 
-        self.weather_label = Label(
-            label="Fetching weather...",
-            style_classes="panel-text",
-        )
+        self.weather_label = Label(label="Fetching weather...", style_classes="panel-text")
         self.box.children = (self.weather_icon, self.weather_label)
-
         self.update_ui(initial=True)
-
-        # Set up a fabricator to call the update_label method at specified intervals
         util_fabricator.connect("changed", lambda *_: self.update_ui())
 
     def fetch_data_from_url(self):
+        logger.debug("[WeatherWidget] Fetching data from URL.")
         data = weather_service.get_weather(
             location=self.config["location"], ttl=self.config["interval"]
         )
-
-        # Update label in main GTK thread
         GLib.idle_add(self.update_data, data)
 
     def update_data(self, data):
         self.update_time = datetime.now()
-
         if data is None:
+            logger.error("[WeatherWidget] Error fetching weather data or data is None.")
             self.weather_label.set_label("")
             self.weather_icon.set_label("")
-            if self.config["tooltip"]:
+            if self.config.get("tooltip", False):
                 self.set_tooltip_text("Error fetching weather data")
-            return
+            return False
 
-        # Get the current weather
         self.current_weather = data["current"]
+        self.update_sunrise_sunset(data) 
 
-        self.update_sunrise_sunset(data)
+        weather_code_str = str(self.current_weather["weatherCode"])
+        icon_key = "icon" if self.check_if_day() else "icon-night"
+        
+        selected_text_icon = weather_icons.get(weather_code_str, {}).get(icon_key, "")
+        if selected_text_icon == "":
+            logger.warning(f"[WeatherWidget] Weather icon not found for code {weather_code_str}, key {icon_key}.")
 
-        text_icon = (
-            weather_icons[self.current_weather["weatherCode"]]["icon"]
-            if self.check_if_day()
-            else weather_icons[self.current_weather["weatherCode"]]["icon-night"]
-        )
+        self.weather_icon.set_label(selected_text_icon)
+        self.weather_label.set_label(self.temperature(value=self.current_weather["temp_C"]))
 
-        self.weather_icon.set_label(text_icon)
-
-        self.weather_label.set_label(
-            self.temperature(value=self.current_weather["temp_C"])
-        )
-
-        # Update the tooltip with the city and weather condition if enabled
-        if self.config["tooltip"]:
+        if self.config.get("tooltip", False):
             self.set_tooltip_text(
                 f"{data['location']}, {self.current_weather['weatherDesc'][0]['value']}"
             )
-
-        # Create popover only once
 
         if self.popover is None:
             self.popover = Popover(
                 content_factory=lambda: WeatherMenu(data=data, config=self.config),
                 point_to=self,
             )
-
-            self._clicked_signal_id = self.connect(
-                "clicked",
-                self.popover.open,
-            )
+            self._clicked_signal_id = self.connect("clicked", self.popover.open)
         else:
-            # Just update content_factory with latest data
             self.popover.set_content_factory(
                 lambda: WeatherMenu(data=data, config=self.config)
             )
-
         return False
 
     def update_ui(self, initial=False):
-        # Check if the update time is more than 5 minutes ago, update the icon
-        if (datetime.now() - self.update_time).total_seconds() > 300:
-            text_icon = (
-                weather_icons[self.current_weather["weatherCode"]]["icon"]
-                if self.check_if_day()
-                else weather_icons[self.current_weather["weatherCode"]]["icon-night"]
-            )
+        if self.current_weather and (datetime.now() - self.update_time).total_seconds() > 300:
+            logger.debug("[WeatherWidget] Refreshing icon due to time passing (5 min threshold).")
+            weather_code_str = str(self.current_weather["weatherCode"])
+            icon_key = "icon" if self.check_if_day() else "icon-night"
+            selected_text_icon = weather_icons.get(weather_code_str, {}).get(icon_key, "")
+            self.weather_icon.set_label(selected_text_icon)
 
-            self.weather_icon.set_label(text_icon)
-
-        if (datetime.now() - self.update_time).total_seconds() < self.config[
-            "interval"
-        ] and not initial:
-            # Check if the update time is more than interval seconds ago
+        if not initial and (datetime.now() - self.update_time).total_seconds() < self.config["interval"]:
             return
 
-            # Start background service
+        logger.debug(f"[WeatherWidget] Interval passed or initial update. Triggering data fetch. Initial: {initial}")
         threading.Thread(target=self.fetch_data_from_url, daemon=True).start()
