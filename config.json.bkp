@@ -95,10 +95,10 @@
 			"date_time","weather"
 		], // this is the middle section of the panel
 		"right_section": [
-			"system_tray",
-			"@group:1",
+			"recorder",
 			"@group:2",
-      "power"
+			"@group:1",
+			"system_tray"
 		] // this is the right section of the panel
 	},
 	"module_groups": [ // module groups are used to group multiple modules together, you can create multiple groups and access as @group:0, @group:1, etc
@@ -107,7 +107,7 @@
 				"workspaces",
 				"window_count"
 			],
-			"spacing": 0,
+			"spacing": 1,
 			"style_classes": [
 				"compact"
 			]
@@ -115,7 +115,8 @@
 		{
 			"widgets": [
 				"updates",
-				"ocr"
+				"ocr",
+				"battery"
 			],
 			"spacing": 4,
 			"style_classes": [
@@ -126,7 +127,7 @@
 			"widgets": [
 				"quick_settings"
 			],
-			"spacing": 1,
+			"spacing": 0,
 			"style_classes": [
 				"compact"
 			]
@@ -179,7 +180,6 @@
 		"play_sound": true,
 		"sound_file": "notification4",
 		"max_count": 200,
-		"max_actions": 3,
 		"display_actions_on_hover": false, // this is to display the actions on hover
 		"dismiss_on_hover": true // this is to dismiss the notification on hover
 	},
@@ -220,20 +220,33 @@
 		"debug": true,
 		"location": "top"
 	},
-  "power": {
-    "show_icon": true,
-    "icon": "",
-    "widget_icon_font_size": "15px", // Or just 22, the code will add "px"
-    "label": false,
-    "tooltip": true,
-    "tooltip_text": "System Power Options",
-    "command": "wlogout -b 2 -c 0 -r 0 -m 0"
+	"power": {
+		"icon": "󰐥",
+		"tooltip": true,
+		"items_per_row": 3,
+		"icon_size": 100,
+		"show_icon": true,
+		"label": false,
+		"buttons": {
+			"shutdown": "systemctl poweroff",
+			"reboot": "systemctl reboot",
+			"hibernate": "systemctl hibernate",
+			"suspend": "systemctl suspend",
+			"lock": "loginctl lock-session",
+			"logout": "loginctl terminate-user $USER"
+		}
 	},
 	"recorder": {
 		"path": "Videos/Screencasting",
 		"audio": true,
 		"icon_size": 16,
 		"tooltip": true
+	},
+	"screen_shot": {
+		"path": "Pictures/Screenshots",
+		"icon_size": 16,
+		"tooltip": true,
+		"icon": "󰄀"
 	},
 	"network_usage": {
 		"upload_icon": "",
@@ -251,9 +264,8 @@
 		},
 		"controls": {
 			"sliders": [
-				"volume",
-        "hyprsunset_intensity",
-        "microphone"
+				"brightness",
+				"volume"
 			]
 		},
 		"auto_hide": false,
@@ -720,7 +732,7 @@
 				},
 				"weather": {
 					"spacing": ".125em",
-					"icon_size": "16px",
+					"icon_size": "14px",
 					"border": {
 						"enabled": false,
 						"width": "1px",
@@ -809,7 +821,7 @@
 		"show_icon": true,
 		"icon": "󱧘",
 		"os": "arch",
-		"interval": 3600000,
+		"interval": 3600,
 		"tooltip": true,
 		"label": true,
 		"flatpak": true,
@@ -828,10 +840,12 @@
 		"show_icon": true
 	},
 	"weather": {
-		"location": "57.816450,12.364350", // this is the location to show the weather, you can use city name, latitude, longitude or zip code or leave it empty to use the default location
+		"location": "kathmandu", // this is the location to show the weather, you can use city name, latitude, longitude or zip code or leave it empty to use the default location
 		"label": true,
 		"tooltip": true,
-		"interval": 3600000 // this is the interval in milliseconds to update the weather, 1 hour is 3600000 milliseconds
+		"temperature_unit": "celsius",
+		"expanded": true, // this is to show the expanded weather widget
+		"interval": 3600 // this is the interval in seconds to update the weather, 1 hour is 3600 seconds
 	},
 	"window_title": {
 		"icon": true, // this is to enable the icon in the window title widget
