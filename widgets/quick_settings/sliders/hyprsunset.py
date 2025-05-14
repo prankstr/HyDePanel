@@ -50,7 +50,6 @@ class HyprSunsetIntensitySlider(SettingSlider):
 
         # Add the "Neutral" button (sets intensity to 0%, Kelvin to KELVIN_NEUTRAL)
         self.neutral_button = HoverButton(
-            child=Gtk.Label(label="Neutral"),
             name="neutral-button-qs",
             tooltip_text=f"Set screen to neutral ({self.KELVIN_NEUTRAL}K)"
         )
