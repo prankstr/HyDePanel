@@ -1,146 +1,95 @@
-from fabric.utils import get_relative_path
+import gi
+gi.require_version("Gdk", "3.0")
+
+from fabric.utils import exec_shell_command_async
 from fabric.widgets.box import Box
-from fabric.widgets.image import Image
 from fabric.widgets.label import Label
-from fabric.widgets.widget import Widget
 
-from shared import ButtonWidget, Dialog, Grid, HoverButton, PopupWindow
-from utils import BarConfig
+from shared import ButtonWidget
+from utils import BarConfig, ExecutableNotFoundError
 from utils.widget_utils import text_icon
-
-
-class PowerMenuPopup(PopupWindow):
-    """A popup window to show power options."""
-
-    instance = None
-
-    @staticmethod
-    def get_default(widget_config):
-        if PowerMenuPopup.instance is None:
-            PowerMenuPopup.instance = PowerMenuPopup(widget_config)
-
-        return PowerMenuPopup.instance
-
-    def __init__(
-        self,
-        config,
-        **kwargs,
-    ):
-        self.icon_size = config["icon_size"]
-
-        power_buttons_list = config["buttons"]
-
-        self.grid = Grid(
-            column_homogeneous=True,
-            row_homogeneous=True,
-        )
-
-        self.row = 0
-        self.column = 0
-        self.max_columns = config["items_per_row"]
-
-        for index, (key, value) in enumerate(power_buttons_list.items()):
-            button = PowerControlButtons(
-                config=config,
-                name=key,
-                command=value,
-                size=self.icon_size,
-            )
-            self.grid.attach(button, self.column, self.row, 1, 1)
-            self.column += 1
-            if self.column >= self.max_columns:
-                self.column = 0
-                self.row += 1
-
-        self.menu = Box(name="power-button-menu", orientation="v", children=self.grid)
-
-        super().__init__(
-            transition_type="crossfade",
-            child=self.menu,
-            anchor="center",
-            keyboard_mode="on-demand",
-            **kwargs,
-        )
-
-    def set_action_buttons_focus(self, can_focus: bool):
-        for child in self.menu.children[0]:
-            child: Widget = child
-            child.set_can_focus(can_focus)
-
-    def toggle_popup(self):
-        self.set_action_buttons_focus(True)
-        return super().toggle_popup()
-
-
-class PowerControlButtons(HoverButton):
-    """A widget to show power options."""
-
-    def __init__(
-        self, config, name: str, command: str, size: int, show_label=True, **kwargs
-    ):
-        self.config = config
-        self.dialog = Dialog(
-            title=name,
-            body=f"Are you sure you want to {name}?",
-            command=command,
-            **kwargs,
-        )
-
-        super().__init__(
-            config=config,
-            orientation="v",
-            name="power-control-button",
-            on_clicked=lambda _: self.on_button_press(),
-            child=Box(
-                orientation="v",
-                children=[
-                    Image(
-                        image_file=get_relative_path(f"../assets/icons/png/{name}.png"),
-                        size=size,
-                    ),
-                    Label(
-                        label=name.capitalize(),
-                        style_classes="panel-text",
-                        visible=show_label,
-                    ),
-                ],
-            ),
-            **kwargs,
-        )
-
-    def on_button_press(
-        self,
-    ):
-        PowerMenuPopup.get_default(widget_config=self.config).toggle_popup()
-        self.dialog.toggle_popup()
-        return True
+import utils.functions as helpers
 
 
 class PowerWidget(ButtonWidget):
-    """A widget to power off the system."""
-
+    """
+    A widget to trigger a power-related command (e.g., wlogout) directly.
+    """
     def __init__(self, widget_config: BarConfig, **kwargs):
-        super().__init__(widget_config["power"], name="power", **kwargs)
+        self.config = widget_config.get("power", {})
+        if not self.config:
+            self.config = {}
+            print("Warning: 'power' configuration not found in widget_config. Using empty config.")
 
-        self.power_label = Label(label="power", style_classes="panel-text")
+        super().__init__(self.config, name="power", **kwargs)
 
-        if self.config["show_icon"]:
-            # Create a TextIcon with the specified icon and size
-            self.icon = text_icon(
-                icon=self.config["icon"],
-                props={"style_classes": "panel-icon"},
+        self.action_command = self.config.get("command", "wlogout")
+        executable_name = self.action_command.split()[0]
+
+        if not helpers.executable_exists(executable_name):
+            print(
+                f"Error: Executable '{executable_name}' (from command: '{self.action_command}') not found. "
+                f"PowerWidget will be disabled."
             )
-            self.box.add(self.icon)
+            self.action_command = None
+            self.set_sensitive(False)
+            self.set_tooltip_text(f"Command '{executable_name}' not found")
 
-        if self.config["label"]:
-            self.box.add(self.power_label)
 
-        if self.config["tooltip"]:
-            self.set_tooltip_text("Power")
+        if self.config.get("show_icon", True):
+            icon_name = self.config.get("icon", "system-shutdown-symbolic")
+            icon_props = {"style_classes": ["panel-icon"]}
 
-        self.connect(
-            "clicked",
-            lambda *_: PowerMenuPopup.get_default(
-                widget_config=self.config
-            ).toggle_popup(),
-        )
+            widget_icon_font_size = self.config.get("widget_icon_font_size")
+            if widget_icon_font_size:
+                font_size_str = f"{widget_icon_font_size}px" if isinstance(widget_icon_font_size, (int, float)) else str(widget_icon_font_size)
+                current_style = icon_props.get("style", "")
+                additional_style = f"font-size: {font_size_str};"
+                icon_props["style"] = f"{current_style} {additional_style}".strip()
+
+            self.icon = text_icon(icon=icon_name, props=icon_props)
+            if hasattr(self, 'box') and isinstance(self.box, Box):
+                self.box.add(self.icon)
+            else:
+                self.add(self.icon)
+
+        if self.config.get("label", False):
+            label_text = self.config.get("label_text", "Power")
+            self.power_label = Label(label=label_text, style_classes=["panel-text"])
+            if hasattr(self, 'box') and isinstance(self.box, Box):
+                self.box.add(self.power_label)
+            else:
+                self.add(self.power_label)
+
+        if self.config.get("tooltip", True):
+            tooltip_text = self.config.get("tooltip_text", "Power Menu")
+            self.set_tooltip_text(tooltip_text)
+
+        if self.action_command:
+            self.connect("clicked", self._on_clicked_handler)
+
+    def _on_clicked_handler(self, _emitter):
+        """Handles the 'clicked' signal from ButtonWidget."""
+        if not self.action_command:
+            print("PowerWidget: Clicked, but no action command is configured or executable.")
+            return True
+
+        print(f"PowerWidget: Executing '{self.action_command}'")
+        try:
+            exec_shell_command_async(
+                self.action_command,
+                lambda success, stdout, stderr: self._handle_command_result(success, stdout, stderr)
+            )
+        except Exception as e:
+            print(f"Error trying to execute command '{self.action_command}': {e}")
+        return True
+
+    def _handle_command_result(self, success: bool, stdout: str, stderr: str):
+        if success:
+            print(f"Command '{self.action_command}' executed successfully.")
+            if stdout:
+                print(f"Stdout: {stdout}")
+        else:
+            print(f"Command '{self.action_command}' failed.")
+            if stderr:
+                print(f"Stderr: {stderr}")
