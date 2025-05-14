@@ -31,21 +31,18 @@ class BaseWeatherWidget:
         raw_sunrise_str_in = data["astronomy"]["sunrise"]
         raw_sunset_str_in = data["astronomy"]["sunset"]
 
-        logger.debug(f"[Weather] Raw sunrise from data: '{raw_sunrise_str_in}' (repr: {repr(raw_sunrise_str_in)})")
-        logger.debug(f"[Weather] Raw sunset from data: '{raw_sunset_str_in}' (repr: {repr(raw_sunset_str_in)})")
-
         sunrise_input_str = str(raw_sunrise_str_in).strip()
         sunset_input_str = str(raw_sunset_str_in).strip()
-        
+
         def parse_12h_to_24h_object(time_str_12h: str) -> datetime | None:
             try:
                 cleaned_str = time_str_12h.strip().upper() 
-                
+
                 time_part_end_idx = cleaned_str.rfind(" ")
                 if time_part_end_idx == -1:
                     logger.error(f"Manual parse: Cannot find space to separate time and AM/PM in '{time_str_12h}'.")
                     return None
-                
+
                 time_part = cleaned_str[:time_part_end_idx].strip()
                 period_part = cleaned_str[time_part_end_idx + 1:].strip()
 
@@ -57,7 +54,7 @@ class BaseWeatherWidget:
                 except ValueError as e_hm:
                     logger.error(f"Manual parse: strptime failed for time part '{time_part}' with %I:%M. Error: {e_hm}")
                     return None
-                    
+
                 hour = dt_obj_hm.hour 
                 minute = dt_obj_hm.minute
 
@@ -68,7 +65,7 @@ class BaseWeatherWidget:
                     if hour != 12: 
                         hour += 12
                 return datetime.now().replace(hour=hour, minute=minute, second=0, microsecond=0)
-            
+
             except Exception as ex_manual_detail: 
                 logger.error(f"Manual parse: Unexpected error processing '{time_str_12h}': {ex_manual_detail}")
                 return None
@@ -79,8 +76,6 @@ class BaseWeatherWidget:
         if sunrise_obj and sunset_obj:
             self.sunrise_time = sunrise_obj.strftime("%H:%M")
             self.sunset_time = sunset_obj.strftime("%H:%M")
-            logger.debug(f"[Weather] Stored 24h sunrise_time (manual): '{self.sunrise_time}'")
-            logger.debug(f"[Weather] Stored 24h sunset_time (manual): '{self.sunset_time}'")
         else:
             logger.error(
                 f"[Weather] Manual AM/PM parsing failed for '{sunrise_input_str}' or '{sunset_input_str}'. "
@@ -108,11 +103,6 @@ class BaseWeatherWidget:
 
         sunrise_dt_str = str(self.sunrise_time).strip() 
         sunset_dt_str = str(self.sunset_time).strip()
-        
-        logger.debug(
-            f"[Weather] check_if_day (24h): Current='{current_dt_str}', "
-            f"Sunrise='{sunrise_dt_str}', Sunset='{sunset_dt_str}' with format='{time_format_24h}'"
-        )
 
         try:
             current_time_obj = datetime.strptime(current_dt_str, time_format_24h).time()
@@ -224,7 +214,7 @@ class WeatherMenu(Box, BaseWeatherWidget):
     def update_widget(self, initial=False):
         if not initial and (datetime.now() - self.update_time).total_seconds() < 60:
             return
-        logger.debug("[WeatherMenu] Updating weather widget")
+        # logger.debug("[WeatherMenu] Updating weather widget") # Can be chatty
         self.update_time = datetime.now()
 
         current_hour_marker = int(datetime.now().strftime("%H")) * 100
@@ -233,14 +223,14 @@ class WeatherMenu(Box, BaseWeatherWidget):
             if int(forecast_item['time']) >= current_hour_marker:
                 forecast_start_index = i
                 break
-        
+
         next_values = self.hourly_forecast[forecast_start_index : forecast_start_index + 4]
 
         for col_idx, column_data in enumerate(next_values):
             if col_idx >= 4: break
 
             hour_label_text_24h = self.convert_wttr_time_to_24hr_format(column_data['time'])
-            
+
             hour = Label(
                 style_classes="weather-forecast-time",
                 label=hour_label_text_24h, 
@@ -291,7 +281,7 @@ class WeatherWidget(ButtonWidget, BaseWeatherWidget):
         util_fabricator.connect("changed", lambda *_: self.update_ui())
 
     def fetch_data_from_url(self):
-        logger.debug("[WeatherWidget] Fetching data from URL.")
+        # logger.debug("[WeatherWidget] Fetching data from URL.") # Can be chatty
         data = weather_service.get_weather(
             location=self.config["location"], ttl=self.config["interval"]
         )
@@ -312,7 +302,7 @@ class WeatherWidget(ButtonWidget, BaseWeatherWidget):
 
         weather_code_str = str(self.current_weather["weatherCode"])
         icon_key = "icon" if self.check_if_day() else "icon-night"
-        
+
         selected_text_icon = weather_icons.get(weather_code_str, {}).get(icon_key, "")
         if selected_text_icon == "":
             logger.warning(f"[WeatherWidget] Weather icon not found for code {weather_code_str}, key {icon_key}.")
@@ -339,7 +329,6 @@ class WeatherWidget(ButtonWidget, BaseWeatherWidget):
 
     def update_ui(self, initial=False):
         if self.current_weather and (datetime.now() - self.update_time).total_seconds() > 300:
-            logger.debug("[WeatherWidget] Refreshing icon due to time passing (5 min threshold).")
             weather_code_str = str(self.current_weather["weatherCode"])
             icon_key = "icon" if self.check_if_day() else "icon-night"
             selected_text_icon = weather_icons.get(weather_code_str, {}).get(icon_key, "")
@@ -348,5 +337,4 @@ class WeatherWidget(ButtonWidget, BaseWeatherWidget):
         if not initial and (datetime.now() - self.update_time).total_seconds() < self.config["interval"]:
             return
 
-        logger.debug(f"[WeatherWidget] Interval passed or initial update. Triggering data fetch. Initial: {initial}")
         threading.Thread(target=self.fetch_data_from_url, daemon=True).start()
