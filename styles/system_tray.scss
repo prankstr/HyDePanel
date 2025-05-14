@@ -41,6 +41,14 @@
     margin: 0 variable.$bar-widgets-system_tray-spacing;
   }
 
+  .tray-icon-button {
+    padding: 3px; 
+  }
+  .hidden-tray-item-button {
+    opacity: 0.7;
+    &:hover { opacity: 1.0; }
+  }
+
   .toggle-icon,
   .panel-icon {
     margin: 0;
