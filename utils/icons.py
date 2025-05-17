@@ -596,4 +596,11 @@ icons = {
         "dark": "dark-mode-symbolic",
         "light": "light-mode-symbolic",
     },
+    "lights": {
+        "generic_sym": "emoji",
+        "generic_char": "💡",
+        "on_char": "󰛨",
+        "off_char": "󰹐",
+        "unavailable_char": "",
+    },
 }

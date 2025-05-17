@@ -1,84 +1,60 @@
-# Quick Settings Module - Cleaned Imports
-
 import os
 import weakref
+from typing import Any, Callable, Dict, List, Tuple, Type, Union
 
+import gi
 from fabric.utils import get_relative_path
 from fabric.widgets.box import Box
 from fabric.widgets.centerbox import CenterBox
-from fabric.widgets.image import Image
-from fabric.widgets.label import Label
-from fabric.widgets.scrolledwindow import ScrolledWindow
-from gi.repository import GLib, Gtk # Gtk needed for PositionType, Grid, GLib for idle_add, etc.
+from fabric.widgets.image import Image as FabricImage
+from fabric.widgets.label import Label as FabricLabel
+from gi.repository import GLib, Gtk
 
 import utils.functions as helpers
-# Import needed services (those used *directly* or whose types are used in quick_settings.py)
-from services import Brightness, MprisPlayerManager, audio_service, bluetooth_service, network_service, NetworkClient # NetworkClient is used in type hint
-
-
-# --- REMOVED UNUSED IMPORTS ---
-# Removed: from services import AudioStream # AudioStream is used in AudioSinkSubMenu, not directly here
-# Removed: from utils.functions import exec_shell_command_async # exec_shell_command_async is used in AudioSinkSubMenu, not directly here
-# Removed: import subprocess # Used by HyprSunsetIntensitySlider, not directly here
-# Removed: import shutil # Used by HyprSunsetIntensitySlider, not directly here
-
-
+from services import MprisPlayerManager
 from shared import (
     ButtonWidget,
     CircleImage,
     Dialog,
-    Grid,
     HoverButton,
     Popover,
     QSChevronButton,
-    QuickSubMenu,
-    # Assume ScanButton is imported in the AudioSinkSubMenu file from shared.buttons
-    # Assume SettingSlider is imported in the sliders file from shared
 )
+from shared.submenu import QuickSubMenu
 from utils import BarConfig
 from utils.icons import icons
-from utils.widget_utils import (
-    get_audio_icon_name,
-    get_brightness_icon_name, # Keep if potentially used elsewhere, though not by QuickSettingsButtonWidget
-    util_fabricator, # Connected to in QuickSettingsMenu for uptime
-)
+from utils.widget_utils import util_fabricator
 
 from ..media import PlayerBoxStack
-# Import needed sliders
 from .shortcuts import ShortcutsContainer
-from .sliders import AudioSlider, BrightnessSlider, MicrophoneSlider, HyprSunsetIntensitySlider # HyprSunsetIntensitySlider is instantiated here
-# Import needed submenus
-from .submenu import (
-    AudioSinkSubMenu, # AudioSinkSubMenu is instantiated here
-    BluetoothSubMenu, # BluetoothSubMenu is instantiated here
-    BluetoothToggle, # BluetoothToggle is instantiated here
-    PowerProfileSubMenu, # PowerProfileSubMenu is instantiated here
-    PowerProfileToggle, # PowerProfileToggle is instantiated here
-    WifiSubMenu, # WifiSubMenu is instantiated here
-    WifiToggle, # WifiToggle is instantiated here
+from .sliders import (
+    AudioSlider,
+    BrightnessSlider,
+    HyprSunsetIntensitySlider,
+    MicrophoneSlider,
 )
-# Assume MicroPhoneSubMenu is still needed and correctly imported
+from .submenu.audiosink import AudioSinkSubMenu
+from .submenu.bluetooth import BluetoothSubMenu, BluetoothToggle
+from .submenu.ha_lights import HALightsSubMenu, HALightsToggle
 from .submenu.mic import MicroPhoneSubMenu
-
-
+from .submenu.power import PowerProfileSubMenu, PowerProfileToggle
+from .submenu.wifi import WifiSubMenu, WifiToggle
 from .togglers import (
-    HyprIdleQuickSetting, # Instantiated here
-    HyprSunsetQuickSetting, # Instantiated here
-    NotificationQuickSetting, # Instantiated here
+    HyprIdleQuickSetting,
+    HyprSunsetQuickSetting,
+    NotificationQuickSetting,
 )
 
+gi.require_version("Gtk", "3.0")
 
-# QuickSettingsButtonBox remains unchanged
+
 class QuickSettingsButtonBox(Box):
-    """A box to display the quick settings buttons."""
-
-    def __init__(self, **kwargs):
+    def __init__(self, config: Dict[str, Any], **kwargs):
         super().__init__(
-            orientation="v",
+            orientation=Gtk.Orientation.VERTICAL,
             name="quick-settings-button-box",
             spacing=4,
-            h_align="start",
-            v_align="start",
+            v_align=Gtk.Align.START,
             v_expand=True,
             **kwargs,
         )
@@ -86,389 +62,609 @@ class QuickSettingsButtonBox(Box):
         self.grid = Gtk.Grid(
             row_spacing=10,
             column_spacing=10,
-            column_homogeneous=True,
-            row_homogeneous=True,
-            visible=True
+            column_homogeneous=config.get("togglers_grid_column_homogeneous", True),
+            row_homogeneous=config.get("togglers_grid_row_homogeneous", True),
+            visible=True,
+            hexpand=True,
         )
-
-        self.active_submenu = None
-
-        bluetooth_submenu_instance = BluetoothSubMenu()
-        self.bluetooth_toggle = BluetoothToggle(
-            submenu=bluetooth_submenu_instance,
-        )
-
-        wifi_submenu_instance = WifiSubMenu()
-        self.wifi_toggle = WifiToggle(
-            submenu=wifi_submenu_instance,
-        )
-
-        powerprofile_submenu_instance = PowerProfileSubMenu()
-        self.power_pfl = PowerProfileToggle(submenu=powerprofile_submenu_instance)
-
-        self.hypr_idle = HyprIdleQuickSetting()
-        self.hypr_sunset = HyprSunsetQuickSetting()
-        self.notification_btn = NotificationQuickSetting()
-
-        self.grid.attach(self.wifi_toggle, 1, 1, 1, 1)
-        self.grid.attach_next_to(self.bluetooth_toggle, self.wifi_toggle, Gtk.PositionType.RIGHT, 1, 1)
-        self.grid.attach_next_to(self.power_pfl, self.wifi_toggle, Gtk.PositionType.BOTTOM, 1, 1)
-        self.grid.attach_next_to(self.hypr_sunset, self.bluetooth_toggle, Gtk.PositionType.BOTTOM, 1, 1)
-        self.grid.attach_next_to(self.hypr_idle, self.power_pfl, Gtk.PositionType.BOTTOM, 1, 1)
-        self.grid.attach_next_to(self.notification_btn, self.hypr_idle, Gtk.PositionType.RIGHT, 1, 1)
-
-        self.wifi_toggle.connect("reveal-clicked", self.set_active_submenu)
-        self.bluetooth_toggle.connect("reveal-clicked", self.set_active_submenu)
-        self.power_pfl.connect("reveal-clicked", self.set_active_submenu)
-
         self.add(self.grid)
-        self.add(wifi_submenu_instance)
-        self.add(bluetooth_submenu_instance)
-        self.add(powerprofile_submenu_instance)
+
+        self.active_submenu: Union[QuickSubMenu, None] = None
+        self.all_created_submenus: List[QuickSubMenu] = []
+
+        self.toggler_registry: Dict[str, Tuple[Type[Gtk.Widget], Union[Callable[[], Union[QuickSubMenu, None]], None]]] = {
+            "wifi": (WifiToggle, lambda: WifiSubMenu()),
+            "bluetooth": (BluetoothToggle, lambda: BluetoothSubMenu()),
+            "home_assistant_lights": (HALightsToggle, lambda: HALightsSubMenu()),
+            "power_profiles": (PowerProfileToggle, lambda: PowerProfileSubMenu()),
+            "hypridle": (HyprIdleQuickSetting, None),
+            "hyprsunset": (HyprSunsetQuickSetting, None),
+            "notifications": (NotificationQuickSetting, None),
+        }
+
+        toggler_definitions = config.get("togglers", [])
+        max_cols = config.get("togglers_max_cols", 2)
+        self._populate_togglers(toggler_definitions, max_cols)
+
+        for submenu_widget in self.all_created_submenus:
+            self.add(submenu_widget)
+
+    def _populate_togglers(self, toggler_definitions: List[Union[Dict[str, Any], str]], max_cols: int):
+        col, row = 0, 0
+        if not toggler_definitions:
+            return
+
+        for item_config in toggler_definitions:
+            toggler_type: Union[str, None] = None
+            if isinstance(item_config, str):
+                toggler_type = item_config
+            elif isinstance(item_config, dict):
+                toggler_type = item_config.get("type")
+
+            if not toggler_type or toggler_type not in self.toggler_registry:
+                continue
+
+            widget_class, submenu_factory = self.toggler_registry[toggler_type]
+            instance: Union[Gtk.Widget, None] = None
+
+            try:
+                if submenu_factory:
+                    submenu_instance = submenu_factory()
+                    if submenu_instance is not None and not isinstance(submenu_instance, QuickSubMenu):
+                        continue
+                    instance = widget_class(submenu=submenu_instance)
+                    if submenu_instance is not None:
+                        self.all_created_submenus.append(submenu_instance)
+                    if isinstance(instance, QSChevronButton):
+                        instance.connect("reveal-clicked", self.set_active_submenu)
+                else:
+                    instance = widget_class()
+            except Exception:
+                continue
+
+            if instance:
+                self.grid.attach(instance, col, row, 1, 1)
+                col += 1
+                if col >= max_cols:
+                    col = 0
+                    row += 1
+
+    def set_active_submenu(self, clicked_button: QSChevronButton):
+        target_submenu = getattr(clicked_button, "submenu", None)
+
+        if not target_submenu:
+            if self.active_submenu is not None:
+                self.active_submenu.do_reveal(False)
+                for btn_widget in self.grid.get_children():
+                    if isinstance(btn_widget, QSChevronButton) and getattr(btn_widget, "submenu", None) == self.active_submenu:
+                        if hasattr(btn_widget, "set_active"):
+                            btn_widget.set_active(False)
+                        break
+                self.active_submenu = None
+            return
+
+        previous_active_submenu = self.active_submenu
+        if previous_active_submenu is not None and previous_active_submenu != target_submenu:
+            previous_active_submenu.do_reveal(False)
+            for btn_widget in self.grid.get_children():
+                if isinstance(btn_widget, QSChevronButton) and getattr(btn_widget, "submenu", None) == previous_active_submenu:
+                    if hasattr(btn_widget, "set_active"):
+                        btn_widget.set_active(False)
+                    break
+
+        self.active_submenu = target_submenu
+
+        if not hasattr(self.active_submenu, "toggle_reveal"):
+            self.active_submenu = None
+            if hasattr(clicked_button, "set_active"):
+                clicked_button.set_active(False)
+            return
+
+        is_now_revealed = self.active_submenu.toggle_reveal()
+
+        if hasattr(clicked_button, "set_active"):
+            clicked_button.set_active(is_now_revealed)
+
+        if not is_now_revealed:
+            self.active_submenu = None
+
+    def destroy(self):
+        for submenu in self.all_created_submenus:
+            if hasattr(submenu, "destroy"):
+                submenu.destroy()
+        self.all_created_submenus.clear()
+        for child in self.grid.get_children():
+            if isinstance(child, QSChevronButton) and hasattr(child, "submenu") and child.submenu:
+                try:
+                    child.disconnect_by_func(self.set_active_submenu)
+                except TypeError:
+                    pass
+        super().destroy()
 
 
-    def set_active_submenu(self, btn: QSChevronButton):
-        if self.active_submenu is not None and self.active_submenu != btn.submenu:
-            self.active_submenu.do_reveal(False)
-        self.active_submenu = btn.submenu
-        self.active_submenu.toggle_reveal() if self.active_submenu else None
-
-
-# QuickSettingsMenu - Modified to use AudioSinkSubMenu, fix uptime icon styling, and add HyprSunsetIntensitySlider
 class QuickSettingsMenu(Box):
-    """The main container widget for the Quick Settings menu."""
-
-    def __init__(self, config, **kwargs):
-        super().__init__( name="quicksettings-menu", orientation="v", all_visible=True, **kwargs )
-
+    def __init__(self, config: Dict[str, Any], **kwargs):
+        super().__init__(name="quicksettings-menu", orientation=Gtk.Orientation.VERTICAL, all_visible=True, **kwargs)
         self.config = config
+        self._uptime_signal_handler_id: Union[int, None] = None
+        self._power_dialog = Dialog()
+
         self_ref = weakref.ref(self)
 
-        # --- User Box Setup ---
-        user_cfg = self.config.get("user", {}); user_image = (get_relative_path("../../assets/images/banner.jpg") if not os.path.exists(os.path.expandvars("$HOME/.face")) else os.path.expandvars("$HOME/.face")); username = (GLib.get_user_name() if user_cfg.get("name") == "system" or user_cfg.get("name") is None else user_cfg.get("name", GLib.get_user_name()));
-        if user_cfg.get("distro_icon", False): username = f"{helpers.get_distro_icon()} {username}"; username_label = Label(label=username, v_align="center", h_align="start", style_classes="user");
+        def _handle_power_action_click(_button: Gtk.Widget, title_str: str, body_str: str, command_to_run: str):
+            menu_instance = self_ref()
+            parent_popover_or_window = None
+            if menu_instance:
+                parent_widget = menu_instance.get_parent()
+                while parent_widget and not isinstance(parent_widget, (Popover, Gtk.Window, Gtk.Popover)):
+                    parent_widget = parent_widget.get_parent()
+                parent_popover_or_window = parent_widget
 
-        # --- Uptime Icon and Label (Corrected Styling and Spacing) ---
-        self.uptime_box = Box(orientation="h", spacing=10, h_align="start", v_align="center", style_classes="uptime")
+            if parent_popover_or_window:
+                if hasattr(parent_popover_or_window, "popdown"):
+                    parent_popover_or_window.popdown()
+                elif hasattr(parent_popover_or_window, "hide"):
+                    parent_popover_or_window.hide()
 
-        self.uptime_icon_label = Label(
-            label="",
-            style_classes="icon",
-            v_align="center",
-        )
+            self._power_dialog.add_content(title=title_str, body=body_str, command=command_to_run).toggle_popup()
+            return True
 
-        self.uptime_value_label = Label(
-            label=helpers.uptime(),
-            v_align="center",
-        )
+        user_cfg = self.config.get("user", {})
+        user_image_path = user_cfg.get("avatar", "~/.face")
+        user_image_file = os.path.expanduser(user_image_path)
+        user_image = get_relative_path("../../assets/images/banner.jpg") if not os.path.exists(user_image_file) else user_image_file
+        username_setting = user_cfg.get("name", "system")
+        username = GLib.get_user_name() if username_setting == "system" or username_setting is None else username_setting
+        if user_cfg.get("distro_icon", False):
+            username = f"{helpers.get_distro_icon()} {username}"
+        username_label = FabricLabel(label=username, v_align="center", h_align="start", style_classes=["user"])
 
+        self.uptime_box = Box(orientation="h", spacing=10, h_align="start", v_align="center", style_classes=["uptime"])
+        self.uptime_icon_label = FabricLabel(label="", style_classes=["icon"], v_align="center")
+        self.uptime_value_label = FabricLabel(label=helpers.uptime(), v_align="center")
         self.uptime_box.add(self.uptime_icon_label)
         self.uptime_box.add(self.uptime_value_label)
-        # --- END Uptime ---
 
-        self.user_box = Gtk.Grid(column_spacing=10, name="user-box-grid", visible=True, hexpand=True); avatar = CircleImage(image_file=user_image, size=65); avatar.set_size_request(65, 65); self.user_box.attach(avatar, 0, 0, 2, 2);
-        power_dialog = Dialog(); button_box_end_content = Box(orientation="h", children=( HoverButton(image=Image(icon_name=icons["powermenu"]["reboot"], icon_size=16), v_align="center", on_clicked=lambda *_: (self_ref() and self_ref().get_parent_window() and self_ref().get_parent_window().hide(), power_dialog.add_content(title="Restart", body="Do you really want to restart?", command="systemctl reboot").toggle_popup())), HoverButton(image=Image(icon_name=icons["powermenu"]["shutdown"], icon_size=16), v_align="center", on_clicked=lambda *_: (self_ref() and self_ref().get_parent_window() and self_ref().get_parent_window().hide(), power_dialog.add_content(title="Shutdown", body="Do you really want to shutdown?", command="systemctl poweroff").toggle_popup())), )); button_box_main = Box(orientation="h", h_align="end", v_align="center", name="button-box", hexpand=True, vexpand=True); button_box_main.pack_end(button_box_end_content, False, False, 0); self.user_box.attach_next_to(username_label, avatar, Gtk.PositionType.RIGHT, 1, 1);
-        self.user_box.attach_next_to(
-            self.uptime_box,
-            username_label,
-            Gtk.PositionType.BOTTOM,
-            1, 1,
-        )
-        self.user_box.attach_next_to(button_box_main, username_label, Gtk.PositionType.RIGHT, 4, 4);
+        self.user_box = Gtk.Grid(column_spacing=10, name="user-box-grid", visible=True, hexpand=True)
+        avatar = CircleImage(image_file=user_image, size=65)
+        self.user_box.attach(avatar, 0, 0, 1, 2)
+        self.user_box.attach(username_label, 1, 0, 1, 1)
+        self.user_box.attach(self.uptime_box, 1, 1, 1, 1)
 
-        # --- Sliders Grid Setup ---
-        sliders_grid = Gtk.Grid(visible=True, row_spacing=10, column_spacing=10, column_homogeneous=True, row_homogeneous=False, valign="center", hexpand=True, vexpand=False);
-        # --- MODIFIED: Instantiate AudioSinkSubMenu ---
-        self.audio_submenu = AudioSinkSubMenu() # Use the AudioSinkSubMenu
-        # --- END MODIFIED ---
-        self.mic_submenu = MicroPhoneSubMenu(); # Keep mic submenu
-
-        # --- Center Box (Sliders & Shortcuts) ---
-        center_box = Box(orientation="h", spacing=10, style_classes="section-box", hexpand=True); main_grid = Gtk.Grid(visible=True, column_spacing=10, hexpand=True, column_homogeneous=False); center_box.add(main_grid); [main_grid.insert_column(i) for i in range(3)];
-        shortcuts_config = self.config.get("shortcuts", {}); slider_class = "slider-box-long";
-        if shortcuts_config and shortcuts_config.get("enabled", False): num_shortcuts = len(shortcuts_config.get("items", [])); slider_class = "slider-box-shorter" if num_shortcuts > 2 else "slider-box-short";
-
-        sliders_box_children = [sliders_grid];
-        configured_controls = self.config.get("controls", {}).get("sliders", []) # Renamed to configured_controls
-
-        # Add submenus based on configured controls
-        # Audio submenu is added if "volume" control is configured
-        if "volume" in configured_controls:
-            sliders_box_children.append(self.audio_submenu)
-        # Microphone submenu is added if "microphone" control is configured
-        if "microphone" in configured_controls:
-             sliders_box_children.append(self.mic_submenu)
-        # No specific submenu needed for hyprsunset_intensity slider itself
-
-
-        sliders_box = Box(orientation="v", spacing=10, style_classes=[slider_class], children=sliders_box_children, h_expand=False, vexpand=False);
-
-        # --- Populate Sliders Grid ---
-        active_controls_count = 0 # Renamed counter
-        if not isinstance(configured_controls, list): configured_controls = []
-        for control_name in configured_controls: # Loop through control names
-            widget = None # Renamed to widget
-            try:
-                # --- MODIFIED: Instantiate sliders based on control_name ---
-                if control_name == "volume":
-                    widget = AudioSlider()
-                elif control_name == "microphone":
-                    widget = MicrophoneSlider()
-                elif control_name == "brightness":
-                     # Instantiate BrightnessSlider IF explicitly configured
-                     widget = BrightnessSlider()
-                elif control_name == "hyprsunset_intensity":
-                    # Instantiate HyprSunsetIntensitySlider IF explicitly configured
-                    widget = HyprSunsetIntensitySlider() # Use the imported slider
-                else: print(f"WARNING: Unknown control type '{control_name}' in config. Skipping.")
-            except Exception as e: print(f"ERROR creating control '{control_name}': {e}")
-
-            if widget:
-                 sliders_grid.attach(
-                     widget, # Attach the created widget
-                     0, active_controls_count, 1, 1,
-                 )
-                 active_controls_count += 1
-
-
-        # --- Layout Sliders Box and Shortcuts Box ---
-        if shortcuts_config and shortcuts_config.get("enabled", False) and "items" in shortcuts_config:
-            shortcuts_box = Box( orientation="v", spacing=10, style_classes=["section-box", "shortcuts-box"], children=(ShortcutsContainer(shortcuts_config=shortcuts_config["items"], style_classes="shortcuts-grid", v_align="start", h_align="fill")), h_expand=False, v_expand=True,); main_grid.attach(sliders_box, 0, 0, 2, 1); main_grid.attach(shortcuts_box, 2, 0, 1, 1);
-        else: main_grid.attach(sliders_box, 0, 0, 3, 1)
-
-        # --- Main Layout (CenterBox) ---
-        box = CenterBox( orientation="v", style_classes="quick-settings-box", start_children=Box( orientation="v", spacing=10, v_align="center", style_classes="section-box", children=(self.user_box, QuickSettingsButtonBox())), center_children=center_box,); media_config = self.config.get("media", {});
-        if media_config.get("enabled", False): box.end_children = Box( orientation="v", spacing=10, style_classes="section-box", children=(PlayerBoxStack(MprisPlayerManager(), config=media_config)))
-        self.add(box)
-
-        # --- Uptime Update ---
-        util_fabricator.connect(
-            "changed",
-            lambda _, value: (
-                self.uptime_value_label.set_label(value.get('uptime', 'N/A'))
+        button_box_end_content = Box(
+            orientation="h",
+            spacing=4,
+            children=(
+                HoverButton(
+                    image=FabricImage(icon_name=icons["powermenu"]["reboot"], icon_size=16),
+                    tooltip_text="Restart",
+                    v_align="center",
+                    on_clicked=lambda btn: _handle_power_action_click(btn, "Restart", "Do you really want to restart?", "systemctl reboot"),
+                ),
+                HoverButton(
+                    image=FabricImage(icon_name=icons["powermenu"]["shutdown"], icon_size=16),
+                    tooltip_text="Shutdown",
+                    v_align="center",
+                    on_clicked=lambda btn: _handle_power_action_click(
+                        btn, "Shutdown", "Do you really want to shutdown?", "systemctl poweroff"
+                    ),
+                ),
             ),
         )
-        # --- END Uptime Update ---
+        power_buttons_container = Box(orientation="h", name="power-buttons-container", children=[button_box_end_content])
+        power_buttons_container.set_halign(Gtk.Align.END)
+        power_buttons_container.set_valign(Gtk.Align.CENTER)
+        self.user_box.attach(power_buttons_container, 2, 0, 1, 2)
+
+        controls_config = self.config.get("controls", {})
+        qobb_config_dict = {
+            "togglers": controls_config.get("togglers", []),
+            "togglers_max_cols": controls_config.get("togglers_max_cols", 2),
+            "togglers_grid_column_homogeneous": controls_config.get("togglers_grid_column_homogeneous", True),
+            "togglers_grid_row_homogeneous": controls_config.get("togglers_grid_row_homogeneous", True),
+        }
+        self.quick_settings_button_box_instance = QuickSettingsButtonBox(config=qobb_config_dict, hexpand=True, h_align="fill")
+
+        sliders_grid = Gtk.Grid(
+            visible=True,
+            row_spacing=10,
+            column_spacing=10,
+            column_homogeneous=True,
+            row_homogeneous=False,
+            valign=Gtk.Align.CENTER,
+            hexpand=True,
+            vexpand=False,
+        )
+        self.audio_submenu = AudioSinkSubMenu()
+        self.mic_submenu = MicroPhoneSubMenu()
+
+        sliders_box_children_content = [sliders_grid]
+        configured_sliders = controls_config.get("sliders", [])
+        active_sliders_count = 0
+        if configured_sliders:
+            for slider_name in configured_sliders:
+                slider_widget: Union[Gtk.Widget, None] = None
+                if slider_name == "volume":
+                    slider_widget = AudioSlider()
+                elif slider_name == "microphone":
+                    slider_widget = MicrophoneSlider()
+                elif slider_name == "brightness":
+                    slider_widget = BrightnessSlider()
+                elif slider_name == "hyprsunset_intensity":
+                    slider_widget = HyprSunsetIntensitySlider()
+                if slider_widget:
+                    sliders_grid.attach(slider_widget, 0, active_sliders_count, 1, 1)
+                    active_sliders_count += 1
+
+        if "volume" in configured_sliders:
+            sliders_box_children_content.append(self.audio_submenu)
+        if "microphone" in configured_sliders:
+            sliders_box_children_content.append(self.mic_submenu)
+
+        shortcuts_config = self.config.get("shortcuts", {})
+        slider_class = "slider-box-long"
+        shortcuts_widget = None
+        if shortcuts_config and shortcuts_config.get("enabled", False) and shortcuts_config.get("items"):
+            num_shortcuts = len(shortcuts_config.get("items", []))
+            slider_class = "slider-box-shorter" if num_shortcuts > 2 else "slider-box-short"
+            shortcuts_widget = ShortcutsContainer(
+                shortcuts_config=shortcuts_config["items"], style_classes=["shortcuts-grid"], v_align="start", h_align="fill"
+            )
+
+        sliders_container_box = Box(
+            orientation="v",
+            spacing=10,
+            style_classes=[slider_class],
+            children=sliders_box_children_content if sliders_grid.get_children() or len(sliders_box_children_content) > 1 else [],
+            h_expand=True,
+            h_align="fill",
+            vexpand=False,
+        )
+
+        center_content_main_grid = Gtk.Grid(visible=True, column_spacing=10, hexpand=True, column_homogeneous=False)
+        added_sliders_box = False
+        if sliders_container_box.get_children():
+            col_span = 2 if shortcuts_widget else 1
+            center_content_main_grid.attach(sliders_container_box, 0, 0, col_span, 1)
+            added_sliders_box = True
+        if shortcuts_widget:
+            col_attach = 2 if added_sliders_box else 0
+            center_content_main_grid.attach(shortcuts_widget, col_attach, 0, 1, 1)
+
+        start_section_content = Box(
+            orientation="v",
+            spacing=10,
+            style_classes=["section-box"],
+            children=(self.user_box, self.quick_settings_button_box_instance),
+            hexpand=True,
+            h_align="fill",
+        )
+        start_section_content.set_valign(Gtk.Align.START)
+
+        center_section_content = Box(
+            orientation="v",
+            style_classes=["section-box"],
+            children=[center_content_main_grid] if center_content_main_grid.get_children() else [],
+            hexpand=True,
+            h_align="fill",
+        )
+
+        media_player_section_content = None
+        media_config = self.config.get("media", {})
+        if media_config.get("enabled", False):
+            media_player_section_content = Box(
+                orientation="v",
+                spacing=10,
+                style_classes=["section-box"],
+                children=(PlayerBoxStack(MprisPlayerManager(), config=media_config)),
+                hexpand=True,
+                h_align="fill",
+            )
+
+        cb_start_children = [start_section_content] if start_section_content.get_children() else None
+        cb_center_children = [center_section_content] if center_section_content.get_children() else None
+        cb_end_children = [media_player_section_content] if media_player_section_content else None
+
+        main_layout_box = CenterBox(
+            orientation="v",
+            style_classes=["quick-settings-box"],
+            start_children=cb_start_children,
+            center_children=cb_center_children,
+            end_children=cb_end_children,
+        )
+        self.add(main_layout_box)
+
+        self._uptime_update_callback_ref = lambda _s, val: self.uptime_value_label.set_label(val.get("uptime", "N/A"))
+        self._uptime_signal_handler_id = util_fabricator.connect("changed", self._uptime_update_callback_ref)
+
+    def destroy(self):
+        if self._uptime_signal_handler_id is not None and util_fabricator.handler_is_connected(self._uptime_signal_handler_id):
+            util_fabricator.disconnect(self._uptime_signal_handler_id)
+
+        if hasattr(self, "quick_settings_button_box_instance"):
+            self.quick_settings_button_box_instance.destroy()
+        if hasattr(self, "audio_submenu") and hasattr(self.audio_submenu, "destroy"):
+            self.audio_submenu.destroy()
+        if hasattr(self, "mic_submenu") and hasattr(self.mic_submenu, "destroy"):
+            self.mic_submenu.destroy()
+        if hasattr(self, "_power_dialog") and hasattr(self._power_dialog, "destroy"):
+            self._power_dialog.destroy()
+        super().destroy()
 
 
-# This is the Button Widget that goes in the bar/panel
 class QuickSettingsButtonWidget(ButtonWidget):
-    """A button widget in the bar to toggle the Quick Settings Popover."""
-
     def __init__(self, widget_config: BarConfig, **kwargs):
+        qs_config_section = widget_config.get("quick_settings", {})
         super().__init__(
-            widget_config.get("quick_settings", {}),
-            name="quick_settings",
+            qs_config_section,
+            name=widget_config.get("name", "quick_settings_bar_button"),
             **kwargs,
         )
-        self.config = widget_config.get("quick_settings", {})
-        if not self.config:
-            print("WARNING: 'quick_settings' configuration missing in widget_config.")
+        self.quick_settings_menu_config_data: Dict[str, Any] = qs_config_section
 
-        # --- Initialize Services & Properties ---
-        self.panel_icon_size = self.config.get("panel_icon_size", 16)
+        if not self.quick_settings_menu_config_data or not isinstance(self.quick_settings_menu_config_data, dict):
+            self.quick_settings_menu_config_data = {}
+
+        self.panel_icon_size = self.quick_settings_menu_config_data.get("panel_icon_size", 16)
+
+        from services import audio_service, bluetooth_service, network_service
+
         self.audio = audio_service
-        self._timeout_id = None
         self.network = network_service
         self.bluetooth_service = bluetooth_service
 
-        # Brightness service is NOT needed for the bar button icons in this version
-        # self.brightness_service = Brightness()
+        self.network_icon = FabricImage(style_classes=["panel-icon"], visible=True)
+        self.audio_icon = FabricImage(style_classes=["panel-icon"], visible=True)
+        self.bluetooth_icon = FabricImage(style_classes=["panel-icon"], visible=True)
 
-        # --- NO QuickSettingsMenu instance stored here ---
-        # A NEW menu instance will be created every time the button is clicked.
+        self._network_primary_dev_sid: Union[int, None] = None
+        self._network_device_ready_sid: Union[int, None] = None
+        self._network_prop_handler_ids: List[Tuple[Any, int]] = []
 
+        self._bt_enabled_handler_id: Union[int, None] = None
+        self._bt_connected_handler_id: Union[int, None] = None
+        self._bt_devices_handler_id: Union[int, None] = None
 
-        # --- Setup Icons ---
-        self.network_icon = Image(style_classes="panel-icon")
-        self.audio_icon = Image(style_classes="panel-icon")
-        self.bluetooth_icon = Image(style_classes="panel-icon")
-        # Removed self.brightness_icon
+        self._audio_speaker_changed_handler_id: Union[int, None] = None
+        self._speaker_vol_h: Union[int, None] = None
+        self._speaker_mut_h: Union[int, None] = None
+        self._conn_spk_inst: Union[Any, None] = None
 
-
-        # --- Connect Signals to Services (Simplified Connections, no global lists) ---
-
-        # Network Service Signals
-        self.network.connect("notify::primary-device", lambda s, pspec: GLib.idle_add(self.update_network_icon))
-        self.network.connect("device-ready", lambda client, *a: GLib.idle_add(self.on_network_device_ready, client))
-
-        # Audio Service Signals
-        self.audio.connect("notify::speaker", self.on_speaker_changed)
-
-        # Removed Brightness Service Signals
-
-        # Bluetooth Service Signals
+        if self.network:
+            self._network_primary_dev_sid = self.network.connect("notify::primary-device", self._on_network_property_changed_cb)
+            self._network_device_ready_sid = self.network.connect("device-ready", self._on_network_device_ready_cb)
+        if self.audio:
+            self._audio_speaker_changed_handler_id = self.audio.connect("notify::speaker", self._on_speaker_changed_cb)
         if self.bluetooth_service:
-             self.bluetooth_service.connect("notify::enabled", lambda s, pspec: GLib.idle_add(self.update_bluetooth_icon))
-             try:
-                 # Use the correct handler list for bluetooth service signals
-                 self._bluetooth_handler_ids.append(self.bluetooth_service.connect("notify::connected-devices", lambda s, pspec: GLib.idle_add(self.update_bluetooth_icon)))
-                 self._bluetooth_handler_ids.append(self.bluetooth_service.connect("notify::devices", lambda s, pspec: GLib.idle_add(self.update_bluetooth_icon)))
-             except Exception:
-                 pass
+            self._bt_enabled_handler_id = self.bluetooth_service.connect("notify::enabled", self._on_bluetooth_property_changed_cb)
+            self._connect_bluetooth_device_signals()
+
+        if self.network:
+            GLib.idle_add(self.on_network_device_ready, self.network)
         else:
-             print("WARNING: Bluetooth service not available for bar icon.")
-
-
-        # --- Set Initial Icon States ---
-        GLib.idle_add(self.on_network_device_ready, self.network)
+            GLib.idle_add(self.update_network_icon)
         GLib.idle_add(self.on_speaker_changed)
         GLib.idle_add(self.update_bluetooth_icon)
 
+        icon_container = Box(orientation="h", spacing=2, visible=True)
+        icon_container.add(self.network_icon)
+        icon_container.add(self.audio_icon)
+        icon_container.add(self.bluetooth_icon)
 
-        # --- Define Button Children ---
-        self.children = Box(
-            children=(
-                self.network_icon,
-                self.audio_icon,
-                self.bluetooth_icon,
-            )
-        )
+        if hasattr(self, "set_child") and callable(self.set_child):
+            self.set_child(icon_container)
+        elif isinstance(self, Gtk.Button) and not self.get_label():
+            self.set_image(icon_container)
+            self.set_always_show_image(True)
 
         self.connect("clicked", self._on_button_clicked)
+        self.popup: Union[Popover, Gtk.Popover, None] = None
 
-    def _on_button_clicked(self, *args):
-        """Handler for the button click to create and open a new Popover."""
+    def _connect_bluetooth_device_signals(self):
+        if not self.bluetooth_service or not hasattr(self.bluetooth_service, "find_property"):
+            return
         try:
-            new_menu_instance = QuickSettingsMenu(config=self.config)
-            new_popup = Popover(
-                point_to=self, # The button widget itself
-                content=new_menu_instance # The NEW menu content widget
-            )
+            if self.bluetooth_service.find_property("connected-devices"):
+                self._bt_connected_handler_id = self.bluetooth_service.connect(
+                    "notify::connected-devices", self._on_bluetooth_property_changed_cb
+                )
+            if self.bluetooth_service.find_property("devices"):
+                self._bt_devices_handler_id = self.bluetooth_service.connect("notify::devices", self._on_bluetooth_property_changed_cb)
+        except Exception:
+            pass
 
-            new_popup.open()
+    def _on_network_property_changed_cb(self, _obj: Any, _pspec: Any):
+        GLib.idle_add(self.update_network_icon)
+        return GLib.SOURCE_REMOVE
 
-        except Exception as e:
-             print(f"ERROR: Exception while creating/opening Popover/Menu on click: {e}")
-             import traceback
-             traceback.print_exc()
+    def _on_network_device_ready_cb(self, client: Any, *_extra_args: Any):
+        GLib.idle_add(self.on_network_device_ready, client)
+        return GLib.SOURCE_REMOVE
 
-    _network_handler_ids = []
+    def _on_speaker_changed_cb(self, _obj: Any, _pspec: Any):
+        GLib.idle_add(self.on_speaker_changed)
+        return GLib.SOURCE_REMOVE
 
-    def update_network_icon(self, *args):
-        icon_name = icons.get("network-offline-symbolic", "network-offline-symbolic")
-        primary = getattr(self.network, 'primary_device', None)
-        wifi = self.network.wifi_device
-        ethernet = self.network.ethernet_device
-        size = self.panel_icon_size
+    def _on_bluetooth_property_changed_cb(self, _obj: Any, _pspec: Any):
+        GLib.idle_add(self.update_bluetooth_icon)
+        return GLib.SOURCE_REMOVE
 
-        if primary == "wifi" and wifi:
-            if wifi.get_property("enabled"):
-                base_icon = wifi.get_property("icon-name")
-                icon_name = base_icon + "-symbolic" if base_icon and isinstance(base_icon, str) else icons["network"]["wifi"]["generic"] + "-symbolic"
+    def _on_button_clicked(self, _widget: Gtk.Widget):
+        if self.popup is not None and self.popup.get_visible():
+            if hasattr(self.popup, "popdown"):
+                self.popup.popdown()
+            elif hasattr(self.popup, "hide"):
+                self.popup.hide()
+            return True
+        try:
+            new_menu_instance = QuickSettingsMenu(config=self.quick_settings_menu_config_data)
+            if Popover.__module__.startswith("gi.repository.Gtk"):
+                self.popup = Popover(relative_to=self)
+                self.popup.add(new_menu_instance)
+                self.popup.set_position(Gtk.PositionType.BOTTOM)
+                self.popup.popup()
             else:
-                icon_name = icons["network"]["wifi"]["disabled"]
-        elif primary == "wired" and ethernet:
-            base_icon = ethernet.get_property("icon-name")
-            icon_name = base_icon or icons.get("network-wired-symbolic", "network-wired-symbolic") if base_icon and isinstance(base_icon, str) else icons.get("network-wired-symbolic", "network-wired-symbolic")
+                self.popup = Popover(point_to=self, content=new_menu_instance)
+                self.popup.open()
+        except Exception:
+            pass
+        return True
 
-        if icon_name is None or not isinstance(icon_name, str) or icon_name.strip() == "" or icon_name == "network-offline-symbolic":
-             icon_name = icons.get("network", {}).get("wifi", {}).get("disconnected", "network-offline-symbolic")
+    def update_network_icon(self, *_args: Any):
+        final_icon_name = icons.get("network-offline-symbolic", "network-offline-symbolic")
+        if self.network:
+            prim_device_type = getattr(self.network, "primary_device", None)
+            if prim_device_type == "wifi":
+                wifi_device = getattr(self.network, "wifi_device", None)
+                if wifi_device and hasattr(wifi_device, "icon_name") and callable(wifi_device.icon_name):
+                    final_icon_name = wifi_device.icon_name()
+                elif wifi_device and hasattr(wifi_device, "get_property"):
+                    try:
+                        final_icon_name = wifi_device.get_property("icon-name") or final_icon_name
+                    except:
+                        pass
+                else:
+                    final_icon_name = icons.get("network", {}).get("wifi", {}).get("disabled", "network-wireless-offline-symbolic")
+            elif prim_device_type == "wired":
+                eth_device = getattr(self.network, "ethernet_device", None)
+                if eth_device and hasattr(eth_device, "get_property"):
+                    try:
+                        reported_icon = eth_device.get_property("icon-name")
+                        if reported_icon and "unknown" not in reported_icon.lower():
+                            final_icon_name = reported_icon
+                        else:
+                            final_icon_name = icons.get("network", {}).get("wired-symbolic", "network-wired-symbolic")
+                    except:
+                        final_icon_name = icons.get("network", {}).get("wired-symbolic", "network-wired-symbolic")
+                else:
+                    final_icon_name = icons.get("network", {}).get("wired-no-route-symbolic", "network-offline-symbolic")
+        self.network_icon.set_from_icon_name(final_icon_name, self.panel_icon_size)
+        return GLib.SOURCE_REMOVE
 
-        if icon_name and isinstance(icon_name, str):
-            self.network_icon.set_from_icon_name(icon_name, size)
-        else:
-            print(f"Warning: Invalid final network icon name '{icon_name}'. Using generic offline.")
-            self.network_icon.set_from_icon_name(icons.get("network-offline-symbolic", "network-offline-symbolic"), size)
+    def _is_network_connected(self, _prim: Any, _wi: Any, _eth: Any) -> bool:
+        try:
+            if self.network and hasattr(self.network, "connectivity"):
+                NM_CONNECTIVITY_FULL = 4
+                if self.network.connectivity == NM_CONNECTIVITY_FULL:
+                    return True
+            active_conn = getattr(self.network, "primary_connection", getattr(self.network, "active_connection", None))
+            if active_conn and hasattr(active_conn, "state"):
+                NM_ACTIVE_CONNECTION_STATE_ACTIVATED = 2
+                return active_conn.state == NM_ACTIVE_CONNECTION_STATE_ACTIVATED
+        except Exception:
+            pass
         return False
 
-    def _disconnect_network_handlers(self):
-         if self.network and self._network_handler_ids:
-               current_wifi = self.network.wifi_device
-               current_ethernet = self.network.ethernet_device
-               for handler_id in self._network_handler_ids:
-                    disconnected = False
-                    if current_wifi:
-                         try:
-                              if current_wifi.handler_is_connected(handler_id):
-                                   current_wifi.disconnect(handler_id)
-                                   disconnected = True
-                         except Exception: pass
-                    if current_ethernet and not disconnected:
-                         try:
-                             if current_ethernet.handler_is_connected(handler_id):
-                                  current_ethernet.disconnect(handler_id)
-                                  disconnected = True
-                         except Exception: pass
-               self._network_handler_ids = []
+    def _disconnect_all_network_prop_handlers(self):
+        for obj_with_signal, handler_id in list(self._network_prop_handler_ids):
+            if (
+                obj_with_signal
+                and handler_id is not None
+                and hasattr(obj_with_signal, "handler_is_connected")
+                and obj_with_signal.handler_is_connected(handler_id)
+            ):
+                obj_with_signal.disconnect(handler_id)
+        self._network_prop_handler_ids.clear()
 
-
-    def on_network_device_ready(self, client: NetworkClient, *args):
-        self._disconnect_network_handlers()
-
-        wifi = self.network.wifi_device
-        ethernet = self.network.ethernet_device
-
+    def on_network_device_ready(self, client: Any):
+        self._disconnect_all_network_prop_handlers()
+        devices_to_monitor = []
+        if client:
+            devices_to_monitor.append(client)
+        wifi = getattr(client, "wifi_device", None) if client else None
+        eth = getattr(client, "ethernet_device", None) if client else None
         if wifi:
-             self._network_handler_ids.append(wifi.connect("notify::icon-name", self.update_network_icon))
-             self._network_handler_ids.append(wifi.connect("notify::enabled", self.update_network_icon))
-             try:
-                 if wifi.find_property("state"):
-                    self._network_handler_ids.append(wifi.connect("notify::state", self.update_network_icon))
-             except Exception: pass
+            devices_to_monitor.append(wifi)
+        if eth:
+            devices_to_monitor.append(eth)
 
-        if ethernet:
-             self._network_handler_ids.append(ethernet.connect("notify::icon-name", self.update_network_icon))
-             try:
-                 if ethernet.find_property("state"):
-                    self._network_handler_ids.append(ethernet.connect("notify::state", self.update_network_icon))
-             except Exception: pass
+        props_to_watch = ["icon-name", "enabled", "state", "active-access-point", "carrier", "primary-device", "connectivity"]
+        for device in devices_to_monitor:
+            if device and hasattr(device, "connect") and hasattr(device, "find_property"):
+                for prop_name in props_to_watch:
+                    if device.find_property(prop_name):
+                        try:
+                            handler_id = device.connect(f"notify::{prop_name}", self._on_network_property_changed_cb)
+                            self._network_prop_handler_ids.append((device, handler_id))
+                        except TypeError:
+                            pass
+        GLib.idle_add(self.update_network_icon)
+        return GLib.SOURCE_REMOVE
 
-        self.update_network_icon()
+    def on_speaker_changed(self, *_args: Any):
+        speaker_obj_cb = lambda _o, _p: GLib.idle_add(self.update_volume)
+        if self._conn_spk_inst:
+            self._speaker_vol_h = self._disconnect_handler_id_safe(self._conn_spk_inst, self._speaker_vol_h)
+            self._speaker_mut_h = self._disconnect_handler_id_safe(self._conn_spk_inst, self._speaker_mut_h)
+        self._conn_spk_inst = None
+        if self.audio and self.audio.speaker and hasattr(self.audio.speaker, "connect"):
+            self._conn_spk_inst = self.audio.speaker
+            speaker_obj = self._conn_spk_inst
+            if hasattr(speaker_obj, "find_property") and speaker_obj.find_property("volume"):
+                self._speaker_vol_h = speaker_obj.connect("notify::volume", speaker_obj_cb)
+            mute_prop = "is-muted" if hasattr(speaker_obj, "find_property") and speaker_obj.find_property("is-muted") else "muted"
+            if hasattr(speaker_obj, "find_property") and speaker_obj.find_property(mute_prop):
+                self._speaker_mut_h = speaker_obj.connect(f"notify::{mute_prop}", speaker_obj_cb)
+            GLib.idle_add(self.update_volume)
+        else:
+            GLib.idle_add(self.update_volume)
+        return GLib.SOURCE_REMOVE
 
-        return False
+    def update_volume(self, *_args: Any):
+        from utils.widget_utils import get_audio_icon_name
 
+        key = icons.get("audio", {}).get("volume", {}).get("muted", "audio-volume-muted-symbolic")
+        calc_vol = 0
+        is_muted = True
+        if self.audio and self.audio.speaker:
+            spk = self.audio.speaker
+            if hasattr(spk, "volume"):
+                calc_vol = round(spk.volume * 100)
+            mute_val = getattr(spk, "is_muted", getattr(spk, "muted", True))
+            is_muted = bool(mute_val)
+            info = get_audio_icon_name(calc_vol, is_muted)
+            if info and "icon" in info:
+                key = info["icon"]
+        else:
+            info = get_audio_icon_name(0, True)
+            key = (
+                info["icon"]
+                if info and "icon" in info
+                else icons.get("audio", {}).get("volume", {}).get("muted-fallback", "audio-volume-muted-symbolic")
+            )
+        self.audio_icon.set_from_icon_name(key, self.panel_icon_size)
+        return GLib.SOURCE_REMOVE
 
-    _speaker_volume_handler_id = None
-    _speaker_muted_handler_id = None
-    _connected_speaker_instance = None
+    def update_bluetooth_icon(self, *_args: Any):
+        name = icons.get("bluetooth", {}).get("disabled-symbolic", "bluetooth-disabled-symbolic")
+        if self.bluetooth_service and getattr(self.bluetooth_service, "enabled", False):
+            name = icons.get("bluetooth", {}).get("active-symbolic", "bluetooth-active-symbolic")
+            conn_dev = getattr(self.bluetooth_service, "connected_devices", [])
+            if isinstance(conn_dev, (list, tuple)) and len(conn_dev) > 0:
+                name = icons.get("bluetooth", {}).get("connected-symbolic", name)
+        self.bluetooth_icon.set_from_icon_name(name, self.panel_icon_size)
+        return GLib.SOURCE_REMOVE
 
-    def on_speaker_changed(self, _obj=None, _pspec=None):
-        if self._connected_speaker_instance:
-            try:
-                 if self._speaker_volume_handler_id and self._connected_speaker_instance.handler_is_connected(self._speaker_volume_handler_id):
-                     self._connected_speaker_instance.disconnect(self._speaker_volume_handler_id)
-                 if self._speaker_muted_handler_id and self._connected_speaker_instance.handler_is_connected(self._speaker_muted_handler_id):
-                     self._connected_speaker_instance.disconnect(self._speaker_muted_handler_id)
-            except Exception: pass
-        self._speaker_volume_handler_id = None
-        self._speaker_muted_handler_id = None
-        self._connected_speaker_instance = None
+    def _disconnect_handler_id_safe(self, obj: Any, handler_id: Union[int, None]) -> None:
+        if obj and handler_id is not None and hasattr(obj, "handler_is_connected") and obj.handler_is_connected(handler_id):
+            obj.disconnect(handler_id)
+        return None
 
-        if self.audio.speaker:
-            self._speaker_volume_handler_id = self.audio.speaker.connect("notify::volume", self.update_volume)
-            self._speaker_muted_handler_id = self.audio.speaker.connect("notify::muted", self.update_volume)
-            self._connected_speaker_instance = self.audio.speaker
-
-        GLib.idle_add(self.update_volume)
-        return False
-
-    def update_volume(self, *_):
-        icon_key = icons["audio"]["volume"]["muted"]
-        if self.audio.speaker:
-            volume = round(self.audio.speaker.volume)
-            muted = self.audio.speaker.muted
-            icon_info = get_audio_icon_name(volume, muted)
-            if icon_info and 'icon' in icon_info: icon_key = icon_info['icon']
-        self.audio_icon.set_from_icon_name(icon_key, self.panel_icon_size)
-        return False
-
-
-    _bluetooth_handler_ids = []
-
-    def update_bluetooth_icon(self, *args):
-        icon_name = icons.get("bluetooth-disabled-symbolic", "bluetooth-disabled-symbolic")
-
+    def destroy(self):
+        if self.popup:
+            self.popup.destroy()
+            self.popup = None
+        self._disconnect_all_network_prop_handlers()
+        if self.network:
+            self._network_primary_dev_sid = self._disconnect_handler_id_safe(self.network, self._network_primary_dev_sid)
+            self._network_device_ready_sid = self._disconnect_handler_id_safe(self.network, self._network_device_ready_sid)
+        if self.audio:
+            self._audio_speaker_changed_handler_id = self._disconnect_handler_id_safe(self.audio, self._audio_speaker_changed_handler_id)
+        if self._conn_spk_inst:
+            self._speaker_vol_h = self._disconnect_handler_id_safe(self._conn_spk_inst, self._speaker_vol_h)
+            self._speaker_mut_h = self._disconnect_handler_id_safe(self._conn_spk_inst, self._speaker_mut_h)
         if self.bluetooth_service:
-            if self.bluetooth_service.enabled:
-                icon_name = icons.get("bluetooth-active-symbolic", "bluetooth-active-symbolic")
-
-                try:
-                    connected_devices = getattr(self.bluetooth_service, 'connected_devices', None)
-                    if connected_devices is not None and hasattr(connected_devices, '__len__') and len(connected_devices) > 0:
-                         icon_name = icons.get("bluetooth-connected-symbolic", icons.get("bluetooth-active-symbolic", "bluetooth-active-symbolic"))
-                except Exception:
-                    pass
-
-        self.bluetooth_icon.set_from_icon_name(icon_name, self.panel_icon_size)
-        return False
+            self._bt_enabled_handler_id = self._disconnect_handler_id_safe(self.bluetooth_service, self._bt_enabled_handler_id)
+            self._bt_connected_handler_id = self._disconnect_handler_id_safe(self.bluetooth_service, self._bt_connected_handler_id)
+            self._bt_devices_handler_id = self._disconnect_handler_id_safe(self.bluetooth_service, self._bt_devices_handler_id)
+        super().destroy()

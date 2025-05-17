@@ -5,6 +5,7 @@ from fabric.bluetooth import BluetoothClient
 from .battery import *
 from .brightness import *
 from .custom_notification import *
+from .home_assistant import *
 from .mpris import *
 from .network import *
 from .networkspeed import *
