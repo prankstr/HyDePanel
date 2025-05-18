@@ -20,12 +20,8 @@ class LottieAnimationWidget(Gtk.DrawingArea, Widget):
         style: str | None = None,
         tooltip_text: str | None = None,
         tooltip_markup: str | None = None,
-        h_align: Literal["fill", "start", "end", "center", "baseline"]
-        | Gtk.Align
-        | None = None,
-        v_align: Literal["fill", "start", "end", "center", "baseline"]
-        | Gtk.Align
-        | None = None,
+        h_align: Literal["fill", "start", "end", "center", "baseline"] | Gtk.Align | None = None,
+        v_align: Literal["fill", "start", "end", "center", "baseline"] | Gtk.Align | None = None,
         h_expand: bool = False,
         v_expand: bool = False,
         name: str | None = None,
@@ -60,20 +56,14 @@ class LottieAnimationWidget(Gtk.DrawingArea, Widget):
         self.lottie_animation: LottieAnimation = lottie_animation
 
         # LOTTIE STUFF
-        self.anim_total_duration: int = (
-            self.lottie_animation.lottie_animation_get_duration()
-        )
-        self.anim_total_frames: int = (
-            self.lottie_animation.lottie_animation_get_totalframe()
-        )
+        self.anim_total_duration: int = self.lottie_animation.lottie_animation_get_duration()
+        self.anim_total_frames: int = self.lottie_animation.lottie_animation_get_totalframe()
         self.width, self.height = self.lottie_animation.lottie_animation_get_size()
 
         self.width = int(self.width * scale)
         self.height = int(self.height * scale)
 
-        self.timeout_delay = int(
-            (1 / self.lottie_animation.lottie_animation_get_framerate()) * 1000
-        )
+        self.timeout_delay = int((1 / self.lottie_animation.lottie_animation_get_framerate()) * 1000)
 
         self.set_size_request(self.width, self.height)
         self.connect("draw", self.draw)
@@ -108,9 +98,7 @@ class LottieAnimationWidget(Gtk.DrawingArea, Widget):
 
     def on_update(self):
         self.is_playing = True
-        self.lottie_animation.lottie_animation_render_async(
-            self.curr_frame, width=self.width, height=self.height
-        )
+        self.lottie_animation.lottie_animation_render_async(self.curr_frame, width=self.width, height=self.height)
 
         self.lottie_animation.lottie_animation_render_flush()
         self.queue_draw()
@@ -127,7 +115,10 @@ class LottieAnimationWidget(Gtk.DrawingArea, Widget):
         return True
 
     def stop_play(self):
-        GLib.source_remove(self.timeout)
+        if self.timeout is not None:
+            GLib.source_remove(self.timeout)
+            self.timeout = None
+        self.is_playing = False
 
     def play_animation(
         self,
@@ -138,15 +129,7 @@ class LottieAnimationWidget(Gtk.DrawingArea, Widget):
         if self.is_playing or self.do_loop:
             return
         self.do_reverse = is_reverse
-        self.curr_frame = (
-            start_frame
-            if start_frame is not None
-            else self.anim_total_frames
-            if self.do_reverse
-            else 0
-        )
-        self.end_frame = (
-            end_frame if end_frame else 0 if self.do_reverse else self.anim_total_frames
-        )
+        self.curr_frame = start_frame if start_frame is not None else self.anim_total_frames if self.do_reverse else 0
+        self.end_frame = end_frame if end_frame else 0 if self.do_reverse else self.anim_total_frames
         # self.curr_frame = self.anim_total_frames if self.is_reverse else 0
         self.timeout = GLib.timeout_add(self.timeout_delay, self.on_update)
