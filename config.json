@@ -256,11 +256,20 @@
     "start_tooltip": "Start Recording",
     "stop_tooltip": "Stop Recording"
   },
+  "home_assistant": { // Now a top-level key
+    "url": "https://your_ha_domain_or_ip",
+    "token": "YOUR_LONG_LIVED_ACCESS_TOKEN",
+    "entities": [
+      "light.davids_kontor_bordslampa",
+      "light.davids_kontor_taklampa"
+    ],
+    "request_timeout": 5,
+    "poll_interval": 30
+  },
   "quick_settings": {
     "user": {
       "avatar": "~/.face",
       "name": "system",
-      // system means it will use the system user name, you can also use your own name
       "distro_icon": true
     },
     "controls": {
