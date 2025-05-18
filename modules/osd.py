@@ -18,24 +18,22 @@ from utils.widget_utils import (
     get_audio_icon_name,
     get_brightness_icon_name,
 )
+from loguru import logger
 
 
 class GenericOSDContainer(Box):
     """A generic OSD container to display the OSD for brightness and audio."""
 
     def __init__(self, config, **kwargs):
+        logger.info("OSDContainer INITIALIZING NOW! (from OSD module)")
         super().__init__(
             orientation="h",
             spacing=10,
             name="osd-container",
             **kwargs,
         )
-        self.level = Label(
-            name="osd-level", h_align="center", h_expand=True, visible=False
-        )
-        self.icon = Image(
-            icon_name=icons.icons["brightness"]["screen"], icon_size=config["icon_size"]
-        )
+        self.level = Label(name="osd-level", h_align="center", h_expand=True, visible=False)
+        self.icon = Image(icon_name=icons.icons["brightness"]["screen"], icon_size=config["icon_size"])
         self.scale = create_scale()
 
         self.children = (self.icon, self.scale, self.level)
@@ -55,9 +53,7 @@ class BrightnessOSDContainer(GenericOSDContainer):
         self.brightness_service = Brightness()
         self.update_brightness()
 
-        self.brightness_service.connect(
-            "brightness_changed", self.on_brightness_changed
-        )
+        self.brightness_service.connect("brightness_changed", self.on_brightness_changed)
 
     @cooldown(0.1)
     def update_brightness(self):
@@ -81,6 +77,7 @@ class AudioOSDContainer(GenericOSDContainer):
     """A widget to display the OSD for audio."""
 
     def __init__(self, config, **kwargs):
+        logger.info("AudioOSDContainer INITIALIZING NOW! (from OSD module)")
         super().__init__(
             config=config,
             **kwargs,
@@ -116,9 +113,7 @@ class AudioOSDContainer(GenericOSDContainer):
                 self.scale.remove_style_class("overamplified")
 
     def update_icon(self, volume):
-        icon_name = get_audio_icon_name(volume, self.audio_service.speaker.muted)[
-            "icon"
-        ]
+        icon_name = get_audio_icon_name(volume, self.audio_service.speaker.muted)["icon"]
         self.icon.set_from_icon_name(icon_name)
 
 
