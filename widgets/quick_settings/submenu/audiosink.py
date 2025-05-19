@@ -1,26 +1,26 @@
 import gi
 
 gi.require_version("Gtk", "3.0")
-from gi.repository import Gtk, GObject, GLib, Pango
-from loguru import logger  # Optional, but good for debugging
+import contextlib
 
 from fabric.utils import exec_shell_command_async
 from fabric.widgets.box import Box
 from fabric.widgets.image import Image
 from fabric.widgets.label import Label
 from fabric.widgets.scrolledwindow import ScrolledWindow
+from gi.repository import GLib, GObject, Gtk, Pango
+from loguru import logger
 
 from services import audio_service
-from shared.buttons import ScanButton  # Assuming this is correctly imported
-from shared.submenu import QuickSubMenu  # Assuming this is correctly imported
+from shared.buttons import ScanButton
+from shared.submenu import QuickSubMenu
 from utils.icons import icons
 
-AudioStream = GObject.Object  # Assuming this is your type for audio streams
+AudioStream = GObject.Object
 
 
 class AudioSinkSubMenu(QuickSubMenu):
     def __init__(self, **kwargs):
-        logger.info("AudioSinkSubMenu: Initializing...")
         self.client = audio_service
         self._client_changed_sid = None
         self._client_speaker_changed_sid = None
@@ -34,12 +34,9 @@ class AudioSinkSubMenu(QuickSubMenu):
         )
         self.sink_list_box.get_style_context().add_class("menu")
 
-        # --- Critical: Ensure _on_sink_activated is defined before this connect call ---
         if not hasattr(self, "_on_sink_activated"):
             logger.error("AudioSinkSubMenu FATAL: _on_sink_activated method is not defined before connecting signal!")
-            # This should ideally not happen if the class is structured correctly below.
         self.sink_list_box.connect("row-activated", self._on_sink_activated)
-        logger.info("AudioSinkSubMenu: Connected sink_list_box 'row-activated'.")
 
         self.scrolled_window_child = ScrolledWindow(
             min_content_height=80,
@@ -53,27 +50,25 @@ class AudioSinkSubMenu(QuickSubMenu):
 
         super().__init__(
             title="Playback Devices",
-            title_icon=icons.get("audio", {}).get("settings", "audio-card-symbolic"),
+            title_icon=str(icons.get("audio", {}).get("settings", "audio-card-symbolic")),
             scan_button=self.scan_button,
             child=self.scrolled_window_child,
             **kwargs,
         )
-        # Connect scan button click after super() to ensure it's part of the hierarchy if super uses it
         self.scan_button.connect("clicked", lambda _: self.update_sinks(force_rescan=True))
 
-        self.set_hexpand(False)  # Should be called after super().__init__()
+        self.set_hexpand(False)
         if self.client:
             self._client_changed_sid = self.client.connect("changed", self.update_sinks)
             self._client_speaker_changed_sid = self.client.connect("speaker-changed", self.update_sinks)
 
-        GLib.idle_add(self._do_update_sinks)  # Initial population
+        GLib.idle_add(self._do_update_sinks)
 
         self.connect("destroy", self._on_destroy)
-        logger.info("AudioSinkSubMenu: Initialization complete.")
 
     def _handle_command_completion(self, stdout: str, stderr: str, exit_code: int, command_desc: str):
         if exit_code == 0:
-            logger.info(f"Success: {command_desc}. Output: {stdout.strip()}")
+            logger.info(f"Success: {command_desc}.")
         else:
             logger.error(f"Error: {command_desc} failed (Code: {exit_code}). Stderr: {stderr.strip()}. Stdout: {stdout.strip()}")
 
@@ -91,22 +86,17 @@ class AudioSinkSubMenu(QuickSubMenu):
                 command_pactl,
                 lambda out, err, code: self._handle_command_completion(out, err, code, f"pactl set-default-sink {pactl_sink_name}"),
             )
-        else:
-            logger.warning("AudioSinkSubMenu: pactl_sink_name not found for setting default sink.")
 
-        if wpctl_sink_id_str and wpctl_sink_id_str != "None":  # Check for actual ID
+        if wpctl_sink_id_str and wpctl_sink_id_str != "None":
             command_wpctl = ["wpctl", "set-default", wpctl_sink_id_str]
             exec_shell_command_async(
                 command_wpctl,
                 lambda out, err, code: self._handle_command_completion(out, err, code, f"wpctl set-default {wpctl_sink_id_str}"),
             )
-        else:
-            logger.warning("AudioSinkSubMenu: wpctl_sink_id_str not found or invalid for setting default sink.")
 
     def _on_sink_activated(self, list_box: Gtk.ListBox, row: Gtk.ListBoxRow):
         selected_sink: AudioStream = getattr(row, "_sink_object", None)
         if selected_sink:
-            # Check if the selected sink is already the default
             is_already_default = False
             if self.client and self.client.speaker:
                 current_speaker_id = getattr(self.client.speaker, "id", None)
@@ -115,7 +105,6 @@ class AudioSinkSubMenu(QuickSubMenu):
                     is_already_default = True
 
             if is_already_default:
-                logger.info(f"AudioSinkSubMenu: Sink '{getattr(selected_sink, 'name', 'Unknown')}' is already the default.")
                 return
 
             logger.info(f"AudioSinkSubMenu: Activating sink '{getattr(selected_sink, 'name', 'Unknown')}'.")
@@ -125,46 +114,39 @@ class AudioSinkSubMenu(QuickSubMenu):
 
     def update_sinks(self, *args, force_rescan=False):
         GLib.idle_add(self._do_update_sinks, force_rescan, priority=GLib.PRIORITY_DEFAULT_IDLE)
-        return GLib.SOURCE_REMOVE  # Important if called from a signal handler
+        return GLib.SOURCE_REMOVE
 
     def _get_custom_sink_icon_name(self, sink: AudioStream) -> str:
         name_lower = (getattr(sink, "name", "") or "").lower()
         description_lower = (getattr(sink, "description", "") or "").lower()
-        sink_icon_name_prop = getattr(sink, "icon_name", None)  # From the stream object itself
+        sink_icon_name_prop = getattr(sink, "icon_name", None)
 
-        # Specific device checks (example)
         if "steelseries" in name_lower or "steelseries" in description_lower:
-            return icons.get("devices", {}).get("headset", "audio-headphones-symbolic")
+            return str(icons.get("devices", {}).get("headset", "audio-headphones-symbolic"))
 
         headphone_keywords = ["headphone", "headset", "earphone", "arctis", "hs80", "headphones"]
         for keyword in headphone_keywords:
             if keyword in name_lower or keyword in description_lower:
-                return icons.get("devices", {}).get("headset", "audio-headphones-symbolic")
+                return str(icons.get("devices", {}).get("headset", "audio-headphones-symbolic"))
 
-        # Generic speaker keywords (avoid matching headphones if they also say "analog")
         speaker_keywords = ["speaker", "hdmi", "displayport", "line out", "analog output", "speakers"]
         for keyword in speaker_keywords:
             if keyword in name_lower or keyword in description_lower:
-                # Avoid classifying headphones as generic speakers if more specific match found
                 is_also_headphone = any(hk_word in name_lower or hk_word in description_lower for hk_word in headphone_keywords)
                 if not is_also_headphone:
-                    return icons.get("devices", {}).get("speakers", "multimedia-speakers-symbolic")
+                    return str(icons.get("devices", {}).get("speakers", "multimedia-speakers-symbolic"))
 
-        # Fallback to icon_name property from the sink object if available
-        if sink_icon_name_prop:
+        if sink_icon_name_prop and isinstance(sink_icon_name_prop, str):
             return sink_icon_name_prop
 
-        # Ultimate fallback
-        return icons.get("devices", {}).get("default_audio_output", "audio-card-symbolic")
+        return str(icons.get("devices", {}).get("default_audio_output", "audio-card-symbolic"))
 
     def _do_update_sinks(self, force_rescan=False):
-        # MODIFIED LINE HERE
         if not isinstance(self.sink_list_box, Gtk.Widget) or not self.sink_list_box.get_realized():
-            logger.warning("AudioSinkSubMenu: sink_list_box not a valid Gtk.Widget or not realized. Skipping update.")
             if hasattr(self.scan_button, "set_sensitive"):
                 self.scan_button.set_sensitive(True)
             if hasattr(self.scan_button, "stop_animation"):
-                self.scan_button.stop_animation()  # Ensure animation stops
+                self.scan_button.stop_animation()
             return GLib.SOURCE_REMOVE
 
         if hasattr(self.scan_button, "set_sensitive"):
@@ -172,7 +154,6 @@ class AudioSinkSubMenu(QuickSubMenu):
         if hasattr(self.scan_button, "play_animation"):
             self.scan_button.play_animation()
 
-        # Clear existing children safely
         for child in self.sink_list_box.get_children():
             self.sink_list_box.remove(child)
 
@@ -223,7 +204,8 @@ class AudioSinkSubMenu(QuickSubMenu):
                 item_box.pack_start(name_label, True, True, 0)
 
                 if is_active:
-                    active_icon_name = icons.get("status", {}).get("checkmark", "object-select-symbolic")
+                    active_icon_name_raw = icons.get("status", {}).get("checkmark", "object-select-symbolic")
+                    active_icon_name = str(active_icon_name_raw) if active_icon_name_raw is not None else "object-select-symbolic"
                     active_indicator = Image(icon_name=active_icon_name, icon_size=16, name="active-sink-indicator")
                     item_box.pack_end(active_indicator, False, False, 0)
                     row.get_style_context().add_class("active-sink")
@@ -240,18 +222,14 @@ class AudioSinkSubMenu(QuickSubMenu):
 
     def _disconnect_signal(self, obj, sid):
         if obj and sid is not None and hasattr(obj, "handler_is_connected") and obj.handler_is_connected(sid):
-            try:
+            with contextlib.suppress(Exception):
                 obj.disconnect(sid)
-            except Exception as e:
-                logger.warning(f"AudioSinkSubMenu: Error disconnecting signal (ID: {sid}): {e}")
-            return True
+                return True
         return False
 
     def _on_destroy(self, *args):
-        logger.info("AudioSinkSubMenu: Destroying and disconnecting signals.")
         if self.client:
             self._disconnect_signal(self.client, self._client_changed_sid)
             self._disconnect_signal(self.client, self._client_speaker_changed_sid)
         self._client_changed_sid = None
         self._client_speaker_changed_sid = None
-        logger.info("AudioSinkSubMenu: Destruction complete.")

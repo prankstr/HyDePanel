@@ -9,9 +9,7 @@ from fabric.widgets.widget import Widget
 from gi.repository import Gdk, GLib, GObject, GtkLayerShell
 from loguru import logger
 
-gi.require_versions(
-    {"Gtk": "3.0", "Gdk": "3.0", "GtkLayerShell": "0.1", "GObject": "2.0"}
-)
+gi.require_versions({"Gtk": "3.0", "Gdk": "3.0", "GtkLayerShell": "0.1", "GObject": "2.0"})
 
 
 class PopoverManager:
@@ -26,7 +24,6 @@ class PopoverManager:
         return cls._instance
 
     def __init__(self):
-        # Shared overlay window for all popovers
         self.overlay = WaylandWindow(
             name="popover-overlay",
             style_classes="popover-overlay",
@@ -41,19 +38,14 @@ class PopoverManager:
             style="background-color: rgba(0,0,0,0.0);",
         )
 
-        # Add empty box so GTK doesn't complain
         self.overlay.add(Box())
 
-        # Keep track of active popovers
         self.active_popover = None
         self.available_windows = []
 
-        # Close popover when clicking overlay
         self.overlay.connect("button-press-event", self._on_overlay_clicked)
         self._hyprland_connection = get_hyprland_connection()
-        self._hyprland_connection.connect(
-            "event::focusedmonv2", self._on_monitor_change
-        )
+        self._hyprland_connection.connect("event::focusedmonv2", self._on_monitor_change)
 
     def _on_monitor_change(self, _, event: HyprlandEvent):
         if self.active_popover:
@@ -84,16 +76,13 @@ class PopoverManager:
 
     def return_popover_window(self, window):
         """Return a popover window to the pool."""
-        # Remove any children
         for child in window.get_children():
             window.remove(child)
 
         window.hide()
-        # Only keep a reasonable number of windows in the pool
         if len(self.available_windows) < 5:
             self.available_windows.append(window)
         else:
-            # Let the window be garbage collected
             window.destroy()
 
     def activate_popover(self, popover):
@@ -105,15 +94,11 @@ class PopoverManager:
         self.overlay.show()
 
 
-@GObject.Signal(
-    flags=GObject.SignalFlags.RUN_LAST, return_type=GObject.TYPE_NONE, arg_types=()
-)
+@GObject.Signal(flags=GObject.SignalFlags.RUN_LAST, return_type=GObject.TYPE_NONE, arg_types=())
 def popover_opened(widget: Widget): ...
 
 
-@GObject.Signal(
-    flags=GObject.SignalFlags.RUN_LAST, return_type=GObject.TYPE_NONE, arg_types=()
-)
+@GObject.Signal(flags=GObject.SignalFlags.RUN_LAST, return_type=GObject.TYPE_NONE, arg_types=())
 def popover_closed(widget: Widget): ...
 
 
@@ -146,7 +131,6 @@ class Popover(Widget):
         self._content = content
         self._visible = False
         self._destroy_timeout = None
-        # Use weak reference to avoid circular reference issues
         self._manager = PopoverManager.get_instance()
 
     def set_content_factory(self, content_factory):
@@ -161,23 +145,46 @@ class Popover(Widget):
         if event.keyval == Gdk.KEY_Escape and self._manager.active_popover:
             self._manager.active_popover.hide_popover()
 
+    def get_visible(self) -> bool:
+        return self._visible
+
     def open(self, *_):
+        logger.debug(f"Popover ({self}): open() called. Current _visible: {self._visible}, _content_window: {self._content_window}")
         if self._destroy_timeout is not None:
             GLib.source_remove(self._destroy_timeout)
             self._destroy_timeout = None
 
-        if not self._content_window:
-            try:
-                self._create_popover()
-            except Exception as e:
-                logger.error(f"Could not create popover! Error: {e}")
-        else:
+        if self._visible and self._content_window is not None:
+            logger.debug(f"Popover ({self}): open() called, but already visible and has content window. Doing nothing.")
             self._manager.activate_popover(self)
             self._content_window.show()
-            self._content_window.steal_input()
+            if hasattr(self._content_window, "steal_input"):
+                self._content_window.steal_input()
+            return
+
+        if not self._content_window:
+            try:
+                logger.debug(f"Popover ({self}): No content window, calling _create_popover()")
+                self._create_popover()
+            except Exception as e:
+                logger.error(f"Popover ({self}): Could not create popover! Error: {e}", exc_info=True)
+                self._visible = False
+                if self._content_window:
+                    self._manager.return_popover_window(self._content_window)
+                self._content_window = None
+                self._content = None
+                return
+        else:
+            logger.debug(f"Popover ({self}): Content window exists, _visible was False. Showing window.")
+            self._manager.activate_popover(self)
+            self._content_window.show()
+            if hasattr(self._content_window, "steal_input"):
+                self._content_window.steal_input()
             self._visible = True
 
-        self.emit("popover-opened")
+        if self._visible:
+            self.emit("popover-opened")
+        logger.debug(f"Popover ({self}): open() finished. _visible is {self._visible}")
 
     def _calculate_margins(self):
         widget_allocation = self._point_to.get_allocation()
@@ -188,11 +195,7 @@ class Popover(Widget):
         monitor_at_window = screen.get_monitor_at_window(self._point_to.get_window())
         monitor_geometry = monitor_at_window.get_geometry()
 
-        x = (
-            widget_allocation.x
-            + (widget_allocation.width / 2)
-            - (popover_size.width / 2)
-        )
+        x = widget_allocation.x + (widget_allocation.width / 2) - (popover_size.width / 2)
         y = widget_allocation.y - 5
 
         if x <= 0:
@@ -217,17 +220,11 @@ class Popover(Widget):
         if self._content is None and self._content_factory is not None:
             self._content = self._content_factory()
 
-        # Get a window from the pool
         self._content_window = self._manager.get_popover_window()
 
-        # This is a hack to fix wrong positioning for widgets that are not rendered
-        # immediately (e.g., Gtk.Calendar())
         self._content.connect("draw", self._on_content_ready)
 
-        # Add content to window
-        self._content_window.add(
-            Box(style_classes="popover-content", children=self._content)
-        )
+        self._content_window.add(Box(style_classes="popover-content", children=self._content))
 
         self._content_window.connect("focus-out-event", self._on_popover_focus_out)
 
@@ -238,23 +235,43 @@ class Popover(Widget):
         self._visible = True
 
     def _on_popover_focus_out(self, widget, event):
-        # This helps with keyboard focus issues
         GLib.timeout_add(100, self.hide_popover)
         return False
 
     def hide_popover(self):
-        if not self._visible or not self._content_window:
+        logger.debug(f"Popover ({self}): hide_popover() called. Current _visible: {self._visible}, _content_window: {self._content_window}")
+        if not self._visible:
+            logger.debug(f"Popover ({self}): hide_popover() called, but already _visible = False. Ensuring actual hide.")
+            if self._content_window:
+                self._content_window.hide()
+            if self._manager.active_popover is self:
+                self._manager.overlay.hide()
+                self._manager.active_popover = None
+            return False
+
+        if not self._content_window:
+            logger.warning(f"Popover ({self}): hide_popover() called with _visible=True but no _content_window.")
+            self._visible = False
+            if self._manager.active_popover is self:
+                self._manager.overlay.hide()
+                self._manager.active_popover = None
+            self.emit("popover-closed")
             return False
 
         self._content_window.hide()
         self._manager.overlay.hide()
+        if self._manager.active_popover is self:
+            self._manager.active_popover = None
+
+        prev_visible_state = self._visible
         self._visible = False
 
         if not self._destroy_timeout:
             self._destroy_timeout = GLib.timeout_add(1000 * 5, self._destroy_popover)
 
-        self.emit("popover-closed")
-
+        if prev_visible_state:
+            logger.debug(f"Popover ({self}): Emitting popover-closed. _visible is now {self._visible}")
+            self.emit("popover-closed")
         return False
 
     def _destroy_popover(self):
@@ -263,11 +280,9 @@ class Popover(Widget):
         self._visible = False
 
         if self._content_window:
-            # Return window to the pool
             self._manager.return_popover_window(self._content_window)
             self._content_window = None
 
-        # Allow content to be garbage collected if no longer needed
         self._content = None
 
         return False
