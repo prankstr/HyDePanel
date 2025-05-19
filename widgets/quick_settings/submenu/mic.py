@@ -1,27 +1,30 @@
+import gi
+
+gi.require_version("Gtk", "3.0")
+import contextlib
+
 from fabric.widgets.box import Box
 from fabric.widgets.image import Image
 from fabric.widgets.label import Label
 from fabric.widgets.scrolledwindow import ScrolledWindow
-from gi.repository import Gtk
+from gi.repository import GLib, Gtk, Pango
+from loguru import logger
 
 from services import audio_service
 from shared.buttons import ScanButton
 from shared.submenu import QuickSubMenu
 from utils.icons import icons
-from widgets.quick_settings.sliders.mic import MicrophoneSlider
+
+from ..sliders.mic import MicrophoneSlider
 
 
 class MicroPhoneSubMenu(QuickSubMenu):
-    """A submenu to display mic controls."""
-
     def __init__(self, **kwargs):
         self.client = audio_service
+        self._client_streams_changed_sid = None
 
-        # Create refresh button first since parent needs it
         self.scan_button = ScanButton()
-        self.scan_button.connect("clicked", self.update_apps)
 
-        # Create app list container
         self.app_list = Gtk.ListBox(
             selection_mode=Gtk.SelectionMode.NONE,
             name="app-list",
@@ -29,106 +32,128 @@ class MicroPhoneSubMenu(QuickSubMenu):
         )
         self.app_list.get_style_context().add_class("menu")
 
-        # Wrap in scrolled window
-        self.child = ScrolledWindow(
-            min_content_size=(-1, 100),
-            max_content_size=(-1, 100),
-            propagate_width=True,
-            propagate_height=True,
+        self.child_scrolled_window = ScrolledWindow(
+            min_content_height=80,
+            max_content_height=200,
+            propagate_natural_width=True,
+            propagate_natural_height=True,
             h_scrollbar_policy=Gtk.PolicyType.NEVER,
+            v_scrollbar_policy=Gtk.PolicyType.AUTOMATIC,
             child=self.app_list,
         )
 
-        # Initialize parent with our components
         super().__init__(
-            title="Microphones",
-            title_icon=icons["audio"]["mic"]["high"],
+            title="Application Microphones",
+            title_icon=str(icons.get("audio", {}).get("mic", {}).get("high", "audio-input-microphone-symbolic")),
             scan_button=self.scan_button,
-            child=self.child,
+            child=self.child_scrolled_window,
             **kwargs,
         )
+        self.scan_button.connect("clicked", self.update_apps_idle)
 
-        # Connect signals
-        self.client.connect("changed", self.update_apps)
-        self.update_apps()
+        if self.client:
+            self._client_streams_changed_sid = self.client.connect("changed", self.update_apps_idle)
+
+        self.update_apps_idle()
+
+        self.connect("destroy", self._on_destroy)
+
+    def update_apps_idle(self, *args):
+        GLib.idle_add(self.update_apps, priority=GLib.PRIORITY_DEFAULT_IDLE)
+        return GLib.SOURCE_REMOVE
 
     def update_apps(self, *_):
-        """Update the list of applications with volume controls."""
+        if not isinstance(self.app_list, Gtk.Widget) or not self.app_list.get_realized():
+            if hasattr(self.scan_button, "set_sensitive"):
+                self.scan_button.set_sensitive(True)
+            if hasattr(self.scan_button, "stop_animation"):
+                self.scan_button.stop_animation()
+            return GLib.SOURCE_REMOVE
 
-        self.scan_button.play_animation()
-        # Clear existing rows
-        while row := self.app_list.get_row_at_index(0):
-            self.app_list.remove(row)
+        if hasattr(self.scan_button, "set_sensitive"):
+            self.scan_button.set_sensitive(False)
+        if hasattr(self.scan_button, "play_animation"):
+            self.scan_button.play_animation()
 
-        if len(self.client.microphones) == 0:
+        for child in self.app_list.get_children():
+            self.app_list.remove(child)
+
+        app_mic_streams = []
+        if self.client:
+            if hasattr(self.client, "recorders") and isinstance(self.client.recorders, list):
+                app_mic_streams = self.client.recorders
+            elif hasattr(self.client, "microphones") and isinstance(self.client.microphones, list):
+                app_mic_streams = [s for s in self.client.microphones if getattr(s, "is_application", False)]
+                if not app_mic_streams and self.client.microphones:
+                    logger.info("MicroPhoneSubMenu: Used client.microphones, but filter 'is_application' found none. Listing all if any.")
+
+        if not app_mic_streams:
             self.app_list.add(
                 Label(
-                    label="No microphones found",
-                    style_classes="menu-item",
-                    halign="center",
-                    valign="center",
-                    h_expand=True,
-                    v_expand=True,
+                    label="No applications using microphone",
+                    style_classes=["menu-item", "placeholder-label"],
+                    halign=Gtk.Align.CENTER,
+                    valign=Gtk.Align.CENTER,
+                    hexpand=True,
+                    vexpand=True,
                 )
             )
-            return
+        else:
+            for app_stream in app_mic_streams:
+                if not app_stream:
+                    logger.warning("MicroPhoneSubMenu: Encountered a None stream in app_mic_streams list.")
+                    continue
 
-        # Clear existing rows
-        while row := self.app_list.get_row_at_index(0):
-            self.app_list.remove(row)
+                row = Gtk.ListBoxRow(activatable=False, selectable=False)
+                row.get_style_context().add_class("menu-item")
 
-        # Add applications
-        for app in self.client.microphones:
-            row = Gtk.ListBoxRow()
-            row.get_style_context().add_class("menu-item")
+                item_box = Box(name="list-box-row", orientation="v", spacing=8, margin_start=6, margin_end=6, margin_top=6, margin_bottom=6)
 
-            # Main container
-            box = Box(
-                name="list-box-row",
-                orientation="v",
-                spacing=10,
-                margin_start=6,
-                margin_end=6,
-                margin_top=3,
-                margin_bottom=3,
-            )
+                name_box = Box(orientation="h", spacing=10, hexpand=True)
 
-            # App name
-            name_box = Box(orientation="h", spacing=12, h_expand=True)
+                stream_icon_name_raw = getattr(app_stream, "icon_name", None) or icons.get("audio", {}).get("mic", {}).get(
+                    "medium", "audio-input-microphone-symbolic"
+                )
+                stream_icon_name = str(stream_icon_name_raw) if stream_icon_name_raw is not None else "audio-input-microphone-symbolic"
+                app_icon_img = Image(icon_name=stream_icon_name, icon_size=16)
+                name_box.pack_start(app_icon_img, False, False, 0)
 
-            # App icon
-            icon = Image(
-                icon_name=app.icon_name or icons["audio"]["mic"]["high"],
-                icon_size=16,
-            )
-            name_box.pack_start(icon, False, True, 0)
+                stream_name = getattr(app_stream, "name", "Unknown App")
+                stream_desc = getattr(app_stream, "description", stream_name)
+                app_name_label = Label(
+                    label=stream_name,
+                    style_classes=["submenu-item-label"],
+                    h_align=Gtk.Align.START,
+                    tooltip_text=stream_desc,
+                    ellipsization=Pango.EllipsizeMode.END,
+                )
+                name_box.pack_start(app_name_label, True, True, 0)
+                item_box.add(name_box)
 
-            # App name label
-            name_label = Label(
-                label=app.name,
-                style_classes="submenu-item-label",
-                h_align="start",
-                tooltip_text=app.description or app.name,
-            )
-            name_label.set_ellipsize(3)  # PANGO_ELLIPSIZE_END
-            name_box.pack_start(name_label, True, True, 0)
+                app_slider = MicrophoneSlider(audio_stream=app_stream, show_chevron=False)
 
-            box.add(name_box)
+                slider_container = Box(margin_start=20)
+                slider_container.add(app_slider)
+                item_box.add(slider_container)
 
-            # Audio controls
-            audio_box = Box(
-                orientation="h",
-                spacing=6,
-                margin_start=24,  # Indent to align with app name
-            )
-
-            audio_box.pack_start(
-                MicrophoneSlider(app, show_chevron=False), True, True, 0
-            )
-
-            box.add(audio_box)
-
-            row.add(box)
-            self.app_list.add(row)
+                row.add(item_box)
+                self.app_list.add(row)
 
         self.app_list.show_all()
+        if hasattr(self.scan_button, "set_sensitive"):
+            self.scan_button.set_sensitive(True)
+        if hasattr(self.scan_button, "stop_animation"):
+            self.scan_button.stop_animation()
+        return GLib.SOURCE_REMOVE
+
+    def _disconnect_signal(self, obj, sid):
+        if obj and sid is not None and hasattr(obj, "handler_is_connected") and obj.handler_is_connected(sid):
+            with contextlib.suppress(Exception):
+                obj.disconnect(sid)
+                return True
+        return False
+
+    def _on_destroy(self, *args):
+        if self.client:
+            self._disconnect_signal(self.client, self._client_streams_changed_sid)
+        self._client_streams_changed_sid = None
