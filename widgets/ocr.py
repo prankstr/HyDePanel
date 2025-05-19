@@ -46,9 +46,7 @@ class OCRWidget(ButtonWidget):
         if event.button == 3:  # Right click
             self.show_language_menu()
         else:  # Left click
-            exec_shell_command_async(
-                f"{self.script_file} {self.current_lang}", lambda *_: None
-            )
+            exec_shell_command_async(f"{self.script_file} {self.current_lang}", lambda *_: None)
 
     def show_language_menu(self):
         menu = Gtk.Menu()

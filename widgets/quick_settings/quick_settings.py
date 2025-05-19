@@ -1,6 +1,5 @@
 import contextlib
 import os
-import weakref
 from typing import Any, Callable, Dict, List, Tuple, Type, Union
 
 import gi
@@ -22,6 +21,7 @@ from utils.icons import icons
 from utils.widget_utils import util_fabricator
 
 from ..media import PlayerBoxStack
+from ..ocr import OCRWidget
 from .shortcuts import ShortcutsContainer
 from .sliders import (
     AudioSlider,
@@ -47,8 +47,6 @@ gi.require_version("GObject", "2.0")
 
 
 class QuickSettingsButtonBox(Box):
-    """A box to display the quick settings buttons."""
-
     def __init__(self, config: Dict[str, Any], **kwargs):
         super().__init__(
             orientation=Gtk.Orientation.VERTICAL,
@@ -174,7 +172,6 @@ class QuickSettingsButtonBox(Box):
             self.active_submenu = None
 
     def destroy(self):
-        logger.debug(f"QuickSettingsButtonBox ({self.get_name()}): Destroying.")
         for submenu in self.all_created_submenus:
             if submenu and hasattr(submenu, "destroy"):
                 submenu.destroy()
@@ -192,45 +189,31 @@ class QuickSettingsButtonBox(Box):
             if hasattr(child, "destroy"):
                 child.destroy()
         super().destroy()
-        logger.debug(f"QuickSettingsButtonBox ({self.get_name()}): Destroyed.")
 
 
 class QuickSettingsMenu(Box):
-    """A menu to quick settings."""
-
     def __init__(
-        self, config: Dict[str, Any], screenshot_action_config: Dict[str, Any], screenrecord_action_config: Dict[str, Any], **kwargs
+        self,
+        config: Dict[str, Any],
+        screenshot_action_config: Dict[str, Any],
+        screenrecord_action_config: Dict[str, Any],
+        ocr_widget_config: BarConfig,
+        **kwargs,
     ):
         super().__init__(name="quicksettings-menu", orientation=Gtk.Orientation.VERTICAL, **kwargs)
         self.config = config
         self.screenshot_action_config: Dict[str, Any] = screenshot_action_config
         self.screenrecord_action_config: Dict[str, Any] = screenrecord_action_config
+        self.ocr_widget_config = ocr_widget_config
+
         self._uptime_signal_handler_id: Union[int, None] = None
         self.recorder_service = ScreenRecorder()
         self._screen_recorder_signal_id: Union[int, None] = None
-        self_ref = weakref.ref(self)
 
-        def _hide_parent_popover():
-            menu_instance = self_ref()
-            if not menu_instance:
-                return
-
-            parent_popover = menu_instance.get_ancestor(Popover)
-            if not parent_popover:
-                parent_popover = menu_instance.get_ancestor(Gtk.Popover)
-
-            if parent_popover:
-                if hasattr(parent_popover, "close"):
-                    parent_popover.close()
-                elif hasattr(parent_popover, "popdown"):
-                    parent_popover.popdown()
-                elif hasattr(parent_popover, "hide"):
-                    parent_popover.hide()
-            else:
-                logger.warning("Could not find parent Popover to hide for QuickSettingsMenu.")
+        self._hide_parent_popover_method_ref_for_children = self._hide_parent_popover_impl
 
         def _handle_screenshot_click(_btn: Gtk.Widget):
-            _hide_parent_popover()
+            self._hide_parent_popover_impl()
             path = str(self.screenshot_action_config.get("path", "Pictures/Screenshots"))
             fullscreen = bool(self.screenshot_action_config.get("fullscreen", False))
             save_copy = bool(self.screenshot_action_config.get("save_copy", True))
@@ -243,11 +226,11 @@ class QuickSettingsMenu(Box):
             if self.recorder_service.is_recording:
                 self.recorder_service.screenrecord_stop()
             else:
-                _hide_parent_popover()
+                self._hide_parent_popover_impl()
                 self.recorder_service.screenrecord_start(path=path, allow_audio=allow_audio, fullscreen=fullscreen_record)
 
         def _handle_wlogout_click(_btn: Gtk.Widget):
-            _hide_parent_popover()
+            self._hide_parent_popover_impl()
             try:
                 helpers.exec_shell_command_async("wlogout", lambda *_: None)
             except Exception as e:
@@ -322,11 +305,15 @@ class QuickSettingsMenu(Box):
         )
         self.screen_record_button.get_style_context().add_class("quickaction-button")
 
-        bottom_action_buttons_hbox = Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0, h_align=Gtk.Align.CENTER)
+        self.ocr_button = OCRWidget(widget_config=self.ocr_widget_config)
+        self.ocr_button.get_style_context().add_class("quickaction-button")
+
+        bottom_action_buttons_hbox = Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4, h_align=Gtk.Align.CENTER)
         bottom_action_buttons_hbox.add(self.screenshot_button)
         bottom_action_buttons_hbox.add(self.screen_record_button)
+        bottom_action_buttons_hbox.add(self.ocr_button)
 
-        action_buttons_master_vbox = Box(orientation=Gtk.Orientation.VERTICAL, spacing=2, v_align=Gtk.Align.CENTER)
+        action_buttons_master_vbox = Box(orientation=Gtk.Orientation.VERTICAL, spacing=4, v_align=Gtk.Align.CENTER)
         action_buttons_master_vbox.add(self.wlogout_button)
         action_buttons_master_vbox.add(bottom_action_buttons_hbox)
         self.user_box.pack_end(action_buttons_master_vbox, False, False, 0)
@@ -455,6 +442,21 @@ class QuickSettingsMenu(Box):
         if util_fabricator:
             self._uptime_signal_handler_id = util_fabricator.connect("changed", self._uptime_update_callback_ref)
 
+    def _hide_parent_popover_impl(self):
+        parent_popover = self.get_ancestor(Popover)
+        if not parent_popover:
+            parent_popover = self.get_ancestor(Gtk.Popover)
+
+        if parent_popover:
+            if hasattr(parent_popover, "close"):
+                parent_popover.close()
+            elif hasattr(parent_popover, "popdown"):
+                parent_popover.popdown()
+            elif hasattr(parent_popover, "hide"):
+                parent_popover.hide()
+        else:
+            logger.warning("Could not find parent Popover to hide for QuickSettingsMenu (impl).")
+
     def _update_screen_record_button_state(self, _service: ScreenRecorder, is_recording: bool):
         if not (
             hasattr(self, "screen_record_button")
@@ -505,7 +507,6 @@ class QuickSettingsMenu(Box):
         return GLib.SOURCE_REMOVE
 
     def destroy(self):
-        logger.debug(f"QuickSettingsMenu ({self.get_name()}): Destroying.")
         if (
             self._uptime_signal_handler_id is not None
             and util_fabricator
@@ -523,6 +524,10 @@ class QuickSettingsMenu(Box):
                     self.recorder_service.disconnect(self._screen_recorder_signal_id)
             self._screen_recorder_signal_id = None
 
+        if hasattr(self, "ocr_button") and self.ocr_button and hasattr(self.ocr_button, "destroy"):
+            self.ocr_button.destroy()
+            self.ocr_button = None
+
         if (
             hasattr(self, "quick_settings_button_box_instance")
             and self.quick_settings_button_box_instance
@@ -539,12 +544,9 @@ class QuickSettingsMenu(Box):
             self.mic_submenu = None
 
         super().destroy()
-        logger.debug(f"QuickSettingsMenu ({self.get_name()}): Destroyed.")
 
 
 class QuickSettingsButtonWidget(ButtonWidget):
-    """A button to display icons and open the menu."""
-
     def __init__(self, widget_config: BarConfig, **kwargs):
         qs_menu_structure_config_raw = widget_config.get("quick_settings", {})
         qs_menu_structure_config: Dict[str, Any] = qs_menu_structure_config_raw if isinstance(qs_menu_structure_config_raw, dict) else {}
@@ -708,7 +710,6 @@ class QuickSettingsButtonWidget(ButtonWidget):
         return GLib.SOURCE_REMOVE
 
     def _on_popover_externally_closed(self, popover_instance: Popover):
-        logger.debug(f"[QSButtonWidget] Popover '{popover_instance}' reported closed by its own signal.")
         if self.popup is popover_instance:
             if self._popover_closed_handler_id is not None:
                 is_connected = False
@@ -724,34 +725,41 @@ class QuickSettingsButtonWidget(ButtonWidget):
                             self.popup.disconnect(self._popover_closed_handler_id)
                 self._popover_closed_handler_id = None
             self.popup = None
-            logger.debug("[QSButtonWidget] self.popup reference nullified by _on_popover_externally_closed.")
 
     def _on_main_button_clicked_for_popover(self, main_button_widget: Gtk.Widget):
         if self._indicator_interaction_in_progress:
-            logger.debug("[QSButtonWidget] Main button click for popover ignored: indicator interaction was in progress.")
             return True
 
         if self.popup is None:
-            logger.info("[QSButtonWidget] Popover is None, creating new instance.")
             try:
 
                 def _content_factory():
+                    ocr_menu_config_dict = self.quick_settings_menu_content_config.get(
+                        "ocr_config_for_menu",
+                        {
+                            "show_icon": True,
+                            "icon": "󰐳",
+                            "label": None,
+                            "tooltip": False,
+                        },
+                    )
+
+                    ocr_bar_config_data = {"ocr": ocr_menu_config_dict}
+                    ocr_bar_config_instance = BarConfig(ocr_bar_config_data)
+
                     return QuickSettingsMenu(
                         config=self.quick_settings_menu_content_config,
                         screenshot_action_config=self.screenshot_action_config,
                         screenrecord_action_config=self.screenrecord_action_config,
+                        ocr_widget_config=ocr_bar_config_instance,
                     )
 
                 self.popup = Popover(content_factory=_content_factory, point_to=self)
-                logger.info(f"[QSButtonWidget] Popover instance created: {self.popup}")
 
                 try:
                     self._popover_closed_handler_id = self.popup.connect("popover-closed", self._on_popover_externally_closed)
-                    logger.info(f"[QSButtonWidget] Successfully connected 'popover-closed' to {self.popup}")
                 except (TypeError, GObject.GErrorException) as e_connect:
-                    logger.error(
-                        f"[QSButtonWidget] Failed to connect 'popover-closed' signal on {self.popup}. Error: {e_connect}", exc_info=True
-                    )
+                    logger.warning(f"[QSButtonWidget] Failed to connect 'popover-closed' signal on {self.popup}. Error: {e_connect}")
                     self._popover_closed_handler_id = None
 
                 if hasattr(self.popup, "open"):
@@ -779,10 +787,8 @@ class QuickSettingsButtonWidget(ButtonWidget):
                     return True
 
                 if self.popup.get_visible():
-                    logger.info(f"[QSButtonWidget] Popover is visible. Attempting to close {self.popup}.")
                     self.popup.close()
                 else:
-                    logger.info(f"[QSButtonWidget] Popover is not visible. Attempting to open {self.popup}.")
                     self.popup.open()
                     GLib.timeout_add(100, self._check_popover_visibility, "existing - open")
 
@@ -802,11 +808,8 @@ class QuickSettingsButtonWidget(ButtonWidget):
                 is_visible_after = self.popup.get_visible()
             elif isinstance(self.popup, Gtk.Popover):
                 is_visible_after = self.popup.is_visible()
-            logger.info(f"[QSButtonWidget] Popover visibility check (from {origin}) after timeout: {is_visible_after}")
             if not is_visible_after and "open" in origin.lower():
                 logger.warning(f"[QSButtonWidget] Popover failed to become visible after {origin} call.")
-        else:
-            logger.info(f"[QSButtonWidget] Popover visibility check (from {origin}): self.popup is None.")
         return GLib.SOURCE_REMOVE
 
     def _connect_bluetooth_device_signals(self):
@@ -885,13 +888,13 @@ class QuickSettingsButtonWidget(ButtonWidget):
     def _is_network_connected(self, _prim: Any, _wi: Any, _eth: Any) -> bool:
         try:
             if self.network and hasattr(self.network, "connectivity"):
-                nm_connectivity_full = 4
-                if self.network.connectivity == nm_connectivity_full:
+                NM_CONNECTIVITY_FULL = 4
+                if self.network.connectivity == NM_CONNECTIVITY_FULL:
                     return True
             active_conn = getattr(self.network, "primary_connection", getattr(self.network, "active_connection", None))
             if active_conn and hasattr(active_conn, "state"):
-                nm_active_connection_state_activated = 2
-                return active_conn.state == nm_active_connection_state_activated
+                NM_ACTIVE_CONNECTION_STATE_ACTIVATED = 2
+                return active_conn.state == NM_ACTIVE_CONNECTION_STATE_ACTIVATED
         except Exception:
             pass
         return False
@@ -937,6 +940,9 @@ class QuickSettingsButtonWidget(ButtonWidget):
         self._conn_spk_inst = None
 
         if self.audio and self.audio.speaker and hasattr(self.audio.speaker, "connect"):
+            if hasattr(self.audio.speaker, "ensure_signals"):
+                with contextlib.suppress(Exception):
+                    self.audio.speaker.ensure_signals()
             self._conn_spk_inst = self.audio.speaker
             speaker_obj = self._conn_spk_inst
 
@@ -968,7 +974,10 @@ class QuickSettingsButtonWidget(ButtonWidget):
         if self.audio and self.audio.speaker:
             spk = self.audio.speaker
             if hasattr(spk, "volume"):
-                calc_vol = round(float(spk.volume))
+                try:
+                    calc_vol = round(float(spk.volume))
+                except (ValueError, TypeError):
+                    calc_vol = 0
             mute_val = getattr(spk, "is_muted", getattr(spk, "muted", True))
             is_muted = bool(mute_val)
             info = get_audio_icon_name(calc_vol, is_muted)
@@ -1006,7 +1015,7 @@ class QuickSettingsButtonWidget(ButtonWidget):
         return None
 
     def _on_destroy(self, *args):
-        logger.debug(f"QuickSettingsButtonWidget ({self.get_name()}): Destroying.")
+        # logger.debug(f"QuickSettingsButtonWidget ({self.get_name()}): Destroying.")
 
         raw_widget = getattr(self, "_raw_recording_indicator_widget", None)
         if (
@@ -1063,4 +1072,3 @@ class QuickSettingsButtonWidget(ButtonWidget):
             self._screen_recorder_bar_signal_id = None
 
         super().destroy()
-        logger.debug(f"QuickSettingsButtonWidget ({self.get_name()}): Destroyed.")
